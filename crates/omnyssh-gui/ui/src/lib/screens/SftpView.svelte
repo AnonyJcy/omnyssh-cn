@@ -95,6 +95,9 @@
       } catch {
         home = '/';
       }
+      if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
+        return;
+      }
       let id: number;
       try {
         id = await sftpOpen(session.hostName);
