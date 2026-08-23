@@ -11,24 +11,35 @@
   import { support } from '$lib/stores/support';
   import { openExternal } from '$lib/ipc/openExternal';
   import { lastError } from '$lib/stores/notifications';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
 
   type Link = { icon: IconName; titleKey: 'support.star_title' | 'support.telegram_title'; locator: string; url: string };
 
-  const links: Link[] = [
-    {
-      icon: 'star',
-      titleKey: 'support.star_title',
-      locator: 'github.com/timhartmann7/omnyssh',
-      url: 'https://github.com/timhartmann7/omnyssh'
-    },
-    {
-      icon: 'telegram',
-      titleKey: 'support.telegram_title',
-      locator: '@timhartmanndev',
-      url: 'https://t.me/timhartmanndev'
-    }
-  ];
+  const links = $derived<Link[]>(
+    $locale === 'zh-CN'
+      ? [
+          {
+            icon: 'star',
+            titleKey: 'support.star_title',
+            locator: 'github.com/AnonyJcy/omnyssh-cn',
+            url: 'https://github.com/AnonyJcy/omnyssh-cn'
+          }
+        ]
+      : [
+          {
+            icon: 'star',
+            titleKey: 'support.star_title',
+            locator: 'github.com/timhartmann7/omnyssh',
+            url: 'https://github.com/timhartmann7/omnyssh'
+          },
+          {
+            icon: 'telegram',
+            titleKey: 'support.telegram_title',
+            locator: '@timhartmanndev',
+            url: 'https://t.me/timhartmanndev'
+          }
+        ]
+  );
 
   async function go(url: string): Promise<void> {
     try {
@@ -64,7 +75,7 @@
     </p>
 
     <p class="mt-5 text-[11px] font-medium uppercase tracking-[0.18em] text-faint">
-      {$t('support.two_things')}
+      {$locale === 'zh-CN' ? $t('support.support_ways') : $t('support.two_things')}
     </p>
 
     <div class="mt-2.5 space-y-2.5">
@@ -91,8 +102,10 @@
       {/each}
     </div>
 
-    <p class="mt-4 text-xs leading-relaxed text-faint">
-      {$t('support.telegram_desc')}
-    </p>
+    {#if $locale !== 'zh-CN'}
+      <p class="mt-4 text-xs leading-relaxed text-faint">
+        {$t('support.telegram_desc')}
+      </p>
+    {/if}
   </div>
 </Modal>

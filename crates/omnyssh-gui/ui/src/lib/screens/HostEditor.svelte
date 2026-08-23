@@ -141,16 +141,16 @@
       </label>
 
       <label class={label}>
-        <span>Notes</span>
-        <textarea bind:value={fields.notes} rows="2" class="{field} resize-y" placeholder="Optional"></textarea>
+        <span>{$t('host_editor.notes')}</span>
+        <textarea bind:value={fields.notes} rows="2" class="{field} resize-y" placeholder={$t('host_editor.notes_placeholder')}></textarea>
       </label>
 
       <div class="grid grid-cols-2 gap-3">
         <label class={label}>
-          <span>Monitoring</span>
+          <span>{$t('host_editor.monitoring')}</span>
           <Select bind:value={fields.monitoring} class={field}>
-            <option value="ssh">SSH metrics</option>
-            <option value="tcpPort">TCP port check</option>
+            <option value="ssh">{$t('host_editor.monitoring_ssh')}</option>
+            <option value="tcpPort">{$t('host_editor.monitoring_tcp')}</option>
           </Select>
         </label>
         {#if fields.monitoring === 'tcpPort'}
@@ -166,7 +166,7 @@
         {/if}
       </div>
       {#if fields.monitoring === 'tcpPort'}
-        <p class="text-xs text-faint">Checks the port only — no login, and no metrics on the card.</p>
+        <p class="text-xs text-faint">{$t('host_editor.tcp_port_hint')}</p>
       {/if}
 
       {#if error}

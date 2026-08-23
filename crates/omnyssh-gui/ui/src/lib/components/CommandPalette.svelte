@@ -147,12 +147,12 @@
     class="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[14vh]"
     role="dialog"
     aria-modal="true"
-    aria-label={$palette.mode === 'pickHost' ? 'Pick a host' : 'Command palette'}
+    aria-label={$palette.mode === 'pickHost' ? $t('palette.pick_host_placeholder') : $t('sidebar.palette')}
   >
     <button
       type="button"
       tabindex="-1"
-      aria-label="Dismiss"
+      aria-label={$t('common.close')}
       class="absolute inset-0 bg-overlay"
       onclick={() => palette.close()}
     ></button>

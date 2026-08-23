@@ -283,12 +283,12 @@
 <div class="absolute inset-0 flex flex-col bg-surface pt-[var(--titlebar-h)] {active ? '' : 'hidden'}">
   {#if openError}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center">
-      <p class="font-medium">Could not open SFTP on {session.hostName}</p>
+      <p class="font-medium">{$t('sftp.open_failed', { name: session.hostName })}</p>
       <p class="max-w-md text-sm text-muted">{openError}</p>
     </div>
   {:else if !view}
     <div class="flex flex-1 items-center justify-center p-10 text-center">
-      <p class="text-sm text-muted">Connecting to {session.hostName}…</p>
+      <p class="text-sm text-muted">{$t('sftp.connecting', { name: session.hostName })}</p>
     </div>
   {:else}
     <div class="grid min-h-0 flex-1 grid-cols-2 divide-x divide-default">
@@ -303,7 +303,7 @@
           <button
             type="button"
             class={toolBtn}
-            title="Upload marked files to the remote directory"
+            title={$t('sftp.upload_tooltip')}
             disabled={localMarkedFiles.length === 0}
             onclick={upload}
           >
@@ -333,7 +333,7 @@
           <button
             type="button"
             class={toolBtn}
-            title="Download marked files to the local directory"
+            title={$t('sftp.download_tooltip')}
             disabled={remoteMarkedFiles.length === 0}
             onclick={download}
           >

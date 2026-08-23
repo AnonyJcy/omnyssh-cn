@@ -297,15 +297,29 @@
               class="rounded-lg bg-surface-inset px-3 py-3 text-center text-xs"
               style="color: {statusToken(card.overall)};"
             >
-              {card.reachability}{card.host.monitorPort ? ` · port ${card.host.monitorPort}` : ''}
+              {card.reachability === 'reachable'
+                ? $t('dashboard.reachable')
+                : card.reachability === 'unreachable'
+                  ? $t('dashboard.unreachable')
+                  : $t('dashboard.checking')}{card.host.monitorPort
+                ? ` · ${$t('dashboard.port_label', { port: card.host.monitorPort })}`
+                : ''}
             </div>
           {:else if card.offline}
             <div class="rounded-lg bg-surface-inset px-3 py-3 text-center text-xs text-faint">{$t('dashboard.offline')}</div>
           {:else}
             <div class="space-y-2">
               {#each card.metricRows as row (row.label)}
+                {@const label =
+                  row.label === 'CPU'
+                    ? $t('dashboard.metric_cpu')
+                    : row.label === 'RAM'
+                      ? $t('dashboard.metric_ram')
+                      : row.label === 'Disk'
+                        ? $t('dashboard.metric_disk')
+                        : row.label}
                 <div class="flex items-center gap-3">
-                  <span class="w-9 shrink-0 text-[11px] uppercase tracking-wider text-faint">{row.label}</span>
+                  <span class="w-9 shrink-0 text-[11px] uppercase tracking-wider text-faint">{label}</span>
                   <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-inset">
                     {#if row.percent != null}
                       <div
@@ -349,7 +363,16 @@
           {#if card.detectedServices.length}
             <div class="flex flex-wrap gap-1.5">
               {#each card.detectedServices as service (service.kind)}
-                <Chip>{service.detail ? `${service.name} · ${service.detail}` : service.name}</Chip>
+                {@const detail =
+                  service.detail === 'no containers'
+                    ? $t('dashboard.docker_no_containers')
+                    : service.detail.includes('/') && service.detail.endsWith(' running')
+                      ? $t('dashboard.docker_running', {
+                          running: service.detail.split('/')[0],
+                          total: service.detail.split('/')[1].replace(' running', '')
+                        })
+                      : service.detail}
+                <Chip>{detail ? `${service.name} · ${detail}` : service.name}</Chip>
               {/each}
             </div>
           {:else if card.servicesError}
