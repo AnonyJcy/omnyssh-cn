@@ -11,7 +11,10 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
+        { "url": "https://github.com/AnonyJcy/omnyssh-cn" },
+        { "url": "https://github.com/AnonyJcy/omnyssh-cn/*" },
         { "url": "https://github.com/timhartmann7/omnyssh" },
+        { "url": "https://github.com/timhartmann7/omnyssh/*" },
         { "url": "https://github.com/timhartmann7/omnyssh/releases/*" },
         { "url": "https://t.me/timhartmanndev" }
       ]

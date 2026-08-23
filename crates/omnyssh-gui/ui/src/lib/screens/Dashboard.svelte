@@ -11,7 +11,7 @@
   import { Surface, Chip, StatusDot, Icon, Button, statusToken } from '$lib/theme';
   import { serverCards, filterHosts, QUICK_ACTIONS } from './serverCard';
   import { spawnSession } from '$lib/stores/navigation';
-  import { streamerMode, displayHostname } from '$lib/stores/streamer';
+  import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { hosts } from '$lib/stores/hosts';
   import { lastError } from '$lib/stores/notifications';
   import { saveHost, deleteHost, reloadHosts, startKeySetup, refreshMetrics } from '$lib/ipc/commands';
@@ -198,11 +198,11 @@
           <div class="flex flex-col gap-3">
             <div class="flex min-w-0 items-start gap-2.5">
               <span class="mt-1 shrink-0">
-                <StatusDot status={card.overall} size={9} label="{card.host.name} status" />
+                <StatusDot status={card.overall} size={9} label="{displayHostTitle(card.host.name, $streamerMode, card.host.hostname)} status" />
               </span>
               <div class="min-w-0">
                 <div class="flex min-w-0 items-center gap-2">
-                  <span class="truncate font-medium" title={card.host.name}>{card.host.name}</span>
+                  <span class="truncate font-medium" title={displayHostTitle(card.host.name, $streamerMode, card.host.hostname)}>{displayHostTitle(card.host.name, $streamerMode, card.host.hostname)}</span>
                   {#if card.host.source === 'sshConfig'}
                     <span
                       class="shrink-0 rounded-full border border-default px-1.5 py-0.5 text-[10px] text-faint"
@@ -232,7 +232,7 @@
                   {/if}
                 </div>
                 <div class="truncate font-mono text-xs text-faint">
-                  {card.host.user}@{displayHostname(card.host.hostname, $streamerMode)}:{card.host
+                  {displayUser(card.host.user, $streamerMode)}@{displayHostname(card.host.hostname, $streamerMode)}:{card.host
                     .port}
                 </div>
               </div>
@@ -243,7 +243,7 @@
                 <button
                   type="button"
                   class={pill}
-                  title="{label} ({card.host.name})"
+                  title="{label} ({displayHostTitle(card.host.name, $streamerMode, card.host.hostname)})"
                   onclick={() => spawnSession(action.kind, card.host.name)}
                 >
                   <Icon name={action.kind} size={13} />
@@ -258,8 +258,8 @@
                 <button
                   type="button"
                   class={iconBtn}
-                  title={$t('dashboard.setup_key_title', { name: card.host.name })}
-                  aria-label={$t('dashboard.setup_key_title', { name: card.host.name })}
+                  title={$t('dashboard.setup_key_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
+                  aria-label={$t('dashboard.setup_key_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
                   onclick={() => setupKey(card.host)}
                 >
                   <Icon name="key" size={14} />
@@ -271,8 +271,8 @@
               <button
                 type="button"
                 class={iconBtn}
-                title={$t('dashboard.edit_host_title', { name: card.host.name })}
-                aria-label={$t('dashboard.edit_host_title', { name: card.host.name })}
+                title={$t('dashboard.edit_host_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
+                aria-label={$t('dashboard.edit_host_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
                 onclick={() => (dialog = { kind: 'edit', host: card.host })}
               >
                 <Icon name="edit" size={14} />
@@ -281,8 +281,8 @@
                 <button
                   type="button"
                   class={iconBtn}
-                  title={$t('dashboard.delete_host_title', { name: card.host.name })}
-                  aria-label={$t('dashboard.delete_host_title', { name: card.host.name })}
+                  title={$t('dashboard.delete_host_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
+                  aria-label={$t('dashboard.delete_host_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
                   onclick={() => (dialog = { kind: 'delete', host: card.host })}
                 >
                   <Icon name="trash" size={14} />

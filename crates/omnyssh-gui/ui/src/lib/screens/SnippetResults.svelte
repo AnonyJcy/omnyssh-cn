@@ -5,6 +5,7 @@
   import { StatusDot, Button, type Status } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
   import { snippetRun, clearRun, type SnippetResultEntry } from '$lib/stores/snippets';
+  import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
 
   function dot(entry: SnippetResultEntry): Status {
@@ -29,8 +30,8 @@
       {#each run.entries as entry (entry.hostName)}
         <div class="rounded-lg border border-default">
           <div class="flex items-center gap-2.5 border-b border-default px-3 py-2">
-            <StatusDot status={dot(entry)} label="{entry.hostName} {state(entry)}" />
-            <span class="min-w-0 flex-1 truncate text-sm font-medium">{entry.hostName}</span>
+            <StatusDot status={dot(entry)} label="{displayHostTitle(entry.hostName, $streamerMode)} {state(entry)}" />
+            <span class="min-w-0 flex-1 truncate text-sm font-medium">{displayHostTitle(entry.hostName, $streamerMode)}</span>
             <span class="shrink-0 text-[11px] uppercase tracking-wider text-faint">{state(entry)}</span>
           </div>
           {#if entry.pending}

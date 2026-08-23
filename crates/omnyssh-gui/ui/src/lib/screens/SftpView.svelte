@@ -14,6 +14,7 @@
   import { sessions, type Session } from '$lib/stores/sessions';
   import { sftp, markedEntries, formatBytes, type PaneSide } from '$lib/stores/sftp';
   import { lastError } from '$lib/stores/notifications';
+  import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
   import {
     sftpOpen,
@@ -286,12 +287,12 @@
 <div class="absolute inset-0 flex flex-col bg-surface pt-[var(--titlebar-h)] {active ? '' : 'hidden'}">
   {#if openError}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center">
-      <p class="font-medium">{$t('sftp.open_failed', { name: session.hostName })}</p>
+      <p class="font-medium">{$t('sftp.open_failed', { name: displayHostTitle(session.hostName, $streamerMode) })}</p>
       <p class="max-w-md text-sm text-muted">{openError}</p>
     </div>
   {:else if !view}
     <div class="flex flex-1 items-center justify-center p-10 text-center">
-      <p class="text-sm text-muted">{$t('sftp.connecting', { name: session.hostName })}</p>
+      <p class="text-sm text-muted">{$t('sftp.connecting', { name: displayHostTitle(session.hostName, $streamerMode) })}</p>
     </div>
   {:else}
     <div class="grid min-h-0 flex-1 grid-cols-2 divide-x divide-default">
@@ -326,7 +327,7 @@
       </SftpPane>
 
       <SftpPane
-        title={session.hostName}
+        title={displayHostTitle(session.hostName, $streamerMode)}
         pane={view.remote}
         onNavigate={(e) => navigate('remote', e)}
         onToggleMark={(p) => toggleMark('remote', p)}

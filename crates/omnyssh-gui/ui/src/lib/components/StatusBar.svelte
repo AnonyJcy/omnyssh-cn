@@ -4,6 +4,7 @@
   // (§4.1); colour lives only in the status dots, per the brandbook.
   import { lastError } from '$lib/stores/notifications';
   import { hostSummary } from '$lib/stores/hostSummary';
+  import { streamerMode } from '$lib/stores/streamer';
   import { StatusDot } from '$lib/theme';
   import { t } from '$lib/i18n';
 </script>
@@ -13,6 +14,8 @@
 >
   {#if $lastError}
     <span class="min-w-0 truncate text-status-crit">{$lastError}</span>
+  {:else if $streamerMode}
+    <span class="min-w-0 truncate text-accent">{$t('statusbar.streamer_active')}</span>
   {:else}
     <span class="min-w-0 truncate">{$t('statusbar.ready')}</span>
   {/if}

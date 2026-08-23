@@ -8,7 +8,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import { hosts } from '$lib/stores/hosts';
   import { statuses } from '$lib/stores/statuses';
-  import { streamerMode, displayHostname } from '$lib/stores/streamer';
+  import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { hostStatusDot } from '$lib/stores/palette';
   import { declaredParams } from './snippetForm';
   import { t } from '$lib/i18n';
@@ -98,7 +98,7 @@
                 type="button"
                 role="checkbox"
                 aria-checked={checked}
-                aria-label={host.name}
+                aria-label={displayHostTitle(host.name, $streamerMode, host.hostname)}
                 class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus
                   {checked ? 'bg-accent text-accent-fg' : 'text-muted hover:bg-surface-inset hover:text-fg'}"
@@ -108,9 +108,9 @@
                   {#if checked}<Icon name="check" size={11} />{/if}
                 </span>
                 <StatusDot status={hostStatusDot($statuses.get(host.name))} />
-                <span class="min-w-0 flex-1 truncate font-medium">{host.name}</span>
+                <span class="min-w-0 flex-1 truncate font-medium">{displayHostTitle(host.name, $streamerMode, host.hostname)}</span>
                 <span class="shrink-0 truncate font-mono text-xs {checked ? '' : 'text-faint'}">
-                  {host.user}@{displayHostname(host.hostname, $streamerMode)}
+                  {displayUser(host.user, $streamerMode)}@{displayHostname(host.hostname, $streamerMode)}
                 </span>
               </button>
             </li>

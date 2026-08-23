@@ -11,7 +11,7 @@
   import { sessions, sessionLabel, sessionStatusDot } from '$lib/stores/sessions';
   import { activeEntity } from '$lib/stores/activeEntity';
   import { spawnSession } from '$lib/stores/navigation';
-  import { streamerMode, displayHostname } from '$lib/stores/streamer';
+  import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { isPaletteChord } from '$lib/stores/ui';
   import { t } from '$lib/i18n';
 
@@ -199,12 +199,12 @@
                 {#if item.kind === 'session'}
                   <StatusDot status={sessionStatusDot[item.session.status]} />
                   <Icon name={item.session.kind} size={16} />
-                  <span class="min-w-0 flex-1 truncate">{sessionLabel(item.session)}</span>
+                  <span class="min-w-0 flex-1 truncate">{displayHostTitle(sessionLabel(item.session), $streamerMode)}</span>
                 {:else}
                   <StatusDot status={hostStatusDot($statuses.get(item.host.name))} />
-                  <span class="min-w-0 flex-1 truncate font-medium">{item.host.name}</span>
+                  <span class="min-w-0 flex-1 truncate font-medium">{displayHostTitle(item.host.name, $streamerMode, item.host.hostname)}</span>
                   <span class="shrink-0 truncate font-mono text-xs {selected === i ? '' : 'text-faint'}">
-                    {item.host.user}@{displayHostname(item.host.hostname, $streamerMode)}
+                    {displayUser(item.host.user, $streamerMode)}@{displayHostname(item.host.hostname, $streamerMode)}
                   </span>
                 {/if}
               </button>

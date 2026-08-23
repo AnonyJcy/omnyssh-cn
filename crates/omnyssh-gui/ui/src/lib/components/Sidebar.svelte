@@ -19,6 +19,7 @@
   import { spawnSession, closeSession } from '$lib/stores/navigation';
   import { palette } from '$lib/stores/palette';
   import { support } from '$lib/stores/support';
+  import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
   import { t, locale, type TranslationKey } from '$lib/i18n';
 
   // Action-first spawn (tech-gui.md §2): a spawner opens the host-picker, then creates
@@ -115,8 +116,8 @@
                 class="flex min-w-0 items-center gap-2.5 rounded text-left {focusRing} {$sidebarCollapsed
                   ? ''
                   : 'flex-1'}"
-                title={sessionTitle(s)}
-                aria-label={sessionTitle(s)}
+                title={$streamerMode ? `${displayHostTitle(s.hostName, true)} · ${s.kind}` : sessionTitle(s)}
+                aria-label={$streamerMode ? `${displayHostTitle(s.hostName, true)} · ${s.kind}` : sessionTitle(s)}
                 aria-current={active ? 'true' : undefined}
                 onclick={() => activeEntity.activateSession(s.id)}
               >
@@ -130,15 +131,15 @@
                 {:else}
                   <StatusDot status={sessionStatusDot[s.status]} />
                   <Icon name={s.kind} size={16} />
-                  <span class="min-w-0 flex-1 truncate">{sessionLabel(s)}</span>
+                  <span class="min-w-0 flex-1 truncate">{displayHostTitle(sessionLabel(s), $streamerMode)}</span>
                 {/if}
               </button>
               {#if !$sidebarCollapsed}
                 <button
                   type="button"
                   class="shrink-0 rounded p-1 opacity-60 transition hover:opacity-100 {focusRing}"
-                  title="{$t('sidebar.close_session')} ({sessionLabel(s)})"
-                  aria-label="{$t('sidebar.close_session')} ({sessionLabel(s)})"
+                  title="{$t('sidebar.close_session')} ({displayHostTitle(sessionLabel(s), $streamerMode)})"
+                  aria-label="{$t('sidebar.close_session')} ({displayHostTitle(sessionLabel(s), $streamerMode)})"
                   onclick={() => closeSession(s.id)}
                 >
                   <Icon name="close" size={14} />
