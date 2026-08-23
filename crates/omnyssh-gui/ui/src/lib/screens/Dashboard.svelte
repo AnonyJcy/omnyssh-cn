@@ -20,6 +20,7 @@
   import { emptyForm, formFromHost } from './hostForm';
   import HostEditor from './HostEditor.svelte';
   import Modal from '$lib/components/Modal.svelte';
+  import { t } from '$lib/i18n';
 
   type Dialog = { kind: 'add' } | { kind: 'edit'; host: HostDto } | { kind: 'delete'; host: HostDto };
 
@@ -125,7 +126,7 @@
 
 <section class="min-h-full px-6 pb-8 pt-3">
   <div class="mb-5 flex items-center gap-3">
-    <h1 class="text-lg font-semibold tracking-tight">Dashboard</h1>
+    <h1 class="text-lg font-semibold tracking-tight">{$t('dashboard.title')}</h1>
     <div class="ml-auto flex items-center gap-2">
       <!-- Host search: a round toggle that slides a live filter field out to its left. -->
       <div class="flex items-center">
@@ -133,8 +134,8 @@
           bind:this={searchInput}
           bind:value={query}
           type="text"
-          placeholder="Search hosts…"
-          aria-label="Search hosts"
+          placeholder={$t('dashboard.search_placeholder')}
+          aria-label={$t('dashboard.search_hosts')}
           disabled={!searchOpen}
           class="{search} {searchOpen
             ? 'mr-2 w-52 px-3 opacity-100'
@@ -146,8 +147,8 @@
         <button
           type="button"
           class={roundBtn}
-          title={searchOpen ? 'Close search' : 'Search hosts'}
-          aria-label={searchOpen ? 'Close search' : 'Search hosts'}
+          title={searchOpen ? $t('dashboard.close_search') : $t('dashboard.search_hosts')}
+          aria-label={searchOpen ? $t('dashboard.close_search') : $t('dashboard.search_hosts')}
           aria-expanded={searchOpen}
           onclick={toggleSearch}
         >
@@ -159,8 +160,8 @@
       <button
         type="button"
         class="{roundBtn} disabled:opacity-60"
-        title="Refresh metrics (R)"
-        aria-label="Refresh metrics"
+        title={$t('dashboard.refresh_metrics')}
+        aria-label={$t('dashboard.refresh_metrics')}
         disabled={refreshing}
         onclick={() => refresh()}
       >
@@ -170,23 +171,23 @@
       </button>
       <button type="button" class={pill} onclick={() => (dialog = { kind: 'add' })}>
         <Icon name="plus" size={13} />
-        Add host
+        {$t('dashboard.add_host')}
       </button>
     </div>
   </div>
 
   {#if $serverCards.length === 0}
     <div class="flex flex-col items-center justify-center gap-2 py-20 text-center">
-      <p class="font-medium">No servers yet</p>
-      <p class="text-sm text-muted">Add a host, or import one from your SSH config, to see it here.</p>
+      <p class="font-medium">{$t('dashboard.no_servers')}</p>
+      <p class="text-sm text-muted">{$t('dashboard.no_servers_desc')}</p>
       <button type="button" class="{pill} mt-2" onclick={() => (dialog = { kind: 'add' })}>
         <Icon name="plus" size={13} />
-        Add host
+        {$t('dashboard.add_host')}
       </button>
     </div>
   {:else if visibleCards.length === 0}
     <div class="flex flex-col items-center justify-center gap-2 py-20 text-center">
-      <p class="text-sm text-muted">No hosts match “{query}”.</p>
+      <p class="text-sm text-muted">{$t('dashboard.no_match', { query })}</p>
     </div>
   {:else}
     <div class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
@@ -205,9 +206,9 @@
                   {#if card.host.source === 'sshConfig'}
                     <span
                       class="shrink-0 rounded-full border border-default px-1.5 py-0.5 text-[10px] text-faint"
-                      title="Imported from ~/.ssh/config — editing saves your own copy, which takes priority"
+                      title={$t('dashboard.ssh_config_title')}
                     >
-                      ssh config
+                      {$t('dashboard.ssh_config_badge')}
                     </span>
                   {/if}
                   <!-- Auth-state reflection (tech-gui.md §4.2): key-only once password
@@ -215,18 +216,18 @@
                   {#if card.host.passwordAuthDisabled}
                     <span
                       class="inline-flex shrink-0 items-center gap-1 rounded-full border border-default px-1.5 py-0.5 text-[10px] text-faint"
-                      title="Password authentication disabled — key only"
+                      title={$t('dashboard.key_only_title')}
                     >
                       <Icon name="shield" size={10} />
-                      key-only
+                      {$t('dashboard.key_only_badge')}
                     </span>
                   {:else if card.host.hasKey}
                     <span
                       class="inline-flex shrink-0 items-center gap-1 rounded-full border border-default px-1.5 py-0.5 text-[10px] text-faint"
-                      title="Key authentication configured"
+                      title={$t('dashboard.key_title')}
                     >
                       <Icon name="key" size={10} />
-                      key
+                      {$t('dashboard.key_badge')}
                     </span>
                   {/if}
                 </div>
@@ -238,14 +239,15 @@
             </div>
             <div class="flex flex-wrap items-center gap-1.5">
               {#each QUICK_ACTIONS as action (action.id)}
+                {@const label = action.kind === 'terminal' ? $t('dashboard.quick_sh') : $t('dashboard.quick_files')}
                 <button
                   type="button"
                   class={pill}
-                  title="{action.label} on {card.host.name}"
+                  title="{label} ({card.host.name})"
                   onclick={() => spawnSession(action.kind, card.host.name)}
                 >
                   <Icon name={action.kind} size={13} />
-                  {action.label}
+                  {label}
                 </button>
               {/each}
               <!-- Key setup stays manual-only even though edit no longer is: it records
@@ -256,8 +258,8 @@
                 <button
                   type="button"
                   class={iconBtn}
-                  title="Set up an SSH key for {card.host.name}"
-                  aria-label="Set up an SSH key for {card.host.name}"
+                  title={$t('dashboard.setup_key_title', { name: card.host.name })}
+                  aria-label={$t('dashboard.setup_key_title', { name: card.host.name })}
                   onclick={() => setupKey(card.host)}
                 >
                   <Icon name="key" size={14} />
@@ -269,8 +271,8 @@
               <button
                 type="button"
                 class={iconBtn}
-                title="Edit {card.host.name}"
-                aria-label="Edit {card.host.name}"
+                title={$t('dashboard.edit_host_title', { name: card.host.name })}
+                aria-label={$t('dashboard.edit_host_title', { name: card.host.name })}
                 onclick={() => (dialog = { kind: 'edit', host: card.host })}
               >
                 <Icon name="edit" size={14} />
@@ -279,8 +281,8 @@
                 <button
                   type="button"
                   class={iconBtn}
-                  title="Delete {card.host.name}"
-                  aria-label="Delete {card.host.name}"
+                  title={$t('dashboard.delete_host_title', { name: card.host.name })}
+                  aria-label={$t('dashboard.delete_host_title', { name: card.host.name })}
                   onclick={() => (dialog = { kind: 'delete', host: card.host })}
                 >
                   <Icon name="trash" size={14} />
@@ -298,7 +300,7 @@
               {card.reachability}{card.host.monitorPort ? ` · port ${card.host.monitorPort}` : ''}
             </div>
           {:else if card.offline}
-            <div class="rounded-lg bg-surface-inset px-3 py-3 text-center text-xs text-faint">offline</div>
+            <div class="rounded-lg bg-surface-inset px-3 py-3 text-center text-xs text-faint">{$t('dashboard.offline')}</div>
           {:else}
             <div class="space-y-2">
               {#each card.metricRows as row (row.label)}
@@ -325,7 +327,7 @@
 
             {#if card.uptime || card.osInfo}
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-                {#if card.uptime}<span>up {card.uptime}</span>{/if}
+                {#if card.uptime}<span>{$t('dashboard.up', { uptime: card.uptime })}</span>{/if}
                 {#if card.uptime && card.osInfo}<span class="text-faint">·</span>{/if}
                 {#if card.osInfo}<span class="min-w-0 truncate">{card.osInfo}</span>{/if}
               </div>
@@ -351,7 +353,7 @@
               {/each}
             </div>
           {:else if card.servicesError}
-            <div class="text-xs text-faint">Service scan unavailable</div>
+            <div class="text-xs text-faint">{$t('dashboard.service_scan_unavailable')}</div>
           {/if}
         </Surface>
       {/each}
@@ -373,16 +375,15 @@
   />
 {:else if dialog?.kind === 'delete'}
   {@const host = dialog.host}
-  <Modal label="Delete host" onClose={() => (dialog = null)}>
+  <Modal label={$t('dashboard.delete_host')} onClose={() => (dialog = null)}>
     <div class="space-y-3 px-5 py-4">
-      <h2 class="text-sm font-semibold">Delete host</h2>
+      <h2 class="text-sm font-semibold">{$t('dashboard.delete_host')}</h2>
       <p class="text-sm text-muted">
-        Delete “{host.name}”? This removes it from <span class="font-mono">hosts.toml</span>. If
-        your SSH config defines the same name, it comes back as an import.
+        {$t('dashboard.delete_confirm', { name: host.name })}
       </p>
       <div class="flex justify-end gap-2 pt-1">
-        <Button variant="ghost" onclick={() => (dialog = null)}>Cancel</Button>
-        <Button variant="primary" onclick={() => confirmDelete(host.name)}>Delete</Button>
+        <Button variant="ghost" onclick={() => (dialog = null)}>{$t('dashboard.cancel')}</Button>
+        <Button variant="primary" onclick={() => confirmDelete(host.name)}>{$t('dashboard.delete')}</Button>
       </div>
     </div>
   </Modal>

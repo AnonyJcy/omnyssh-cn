@@ -7,6 +7,7 @@
   import { sidebarCollapsed } from '$lib/stores/ui';
   import { streamerMode } from '$lib/stores/streamer';
   import { refreshInterval, driveMetricsRefresh } from '$lib/stores/settings';
+  import { locale } from '$lib/i18n';
   import { lastError } from '$lib/stores/notifications';
 
   let { children } = $props();
@@ -20,6 +21,7 @@
     void sidebarCollapsed.hydrate();
     void streamerMode.hydrate();
     void refreshInterval.hydrate();
+    void locale.hydrate();
     // Force a metric refresh on the user's interval; re-arms when the interval changes.
     const stopRefresh = driveMetricsRefresh(() => {
       void refreshMetrics().catch(() => {});

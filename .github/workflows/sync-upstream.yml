@@ -1,0 +1,39 @@
+name: Sync Upstream & Update zh-cn
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 02:00 UTC (10:00 AM Beijing Time)
+  workflow_dispatch:      # Allows manual trigger anytime from GitHub Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync with upstream repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout zh-cn branch
+        uses: actions/checkout@v4
+        with:
+          ref: zh-cn
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git Author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch and Merge Upstream
+        run: |
+          git remote add upstream https://github.com/timhartmann7/omnyssh.git || true
+          git fetch upstream main --tags
+          
+          # Attempt auto-merge of upstream main into zh-cn
+          git merge upstream/main -m "chore(sync): merge upstream changes into zh-cn" || {
+            echo "::error::Merge conflict detected! Manual resolution required."
+            exit 1
+          }
+          
+          git push origin zh-cn

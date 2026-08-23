@@ -5,6 +5,7 @@
   import { lastError } from '$lib/stores/notifications';
   import { hostSummary } from '$lib/stores/hostSummary';
   import { StatusDot } from '$lib/theme';
+  import { t } from '$lib/i18n';
 </script>
 
 <footer
@@ -13,18 +14,18 @@
   {#if $lastError}
     <span class="min-w-0 truncate text-status-crit">{$lastError}</span>
   {:else}
-    <span class="min-w-0 truncate">Ready</span>
+    <span class="min-w-0 truncate">{$t('statusbar.ready')}</span>
   {/if}
   <div class="flex shrink-0 items-center gap-3">
-    <span>{$hostSummary.total} {$hostSummary.total === 1 ? 'host' : 'hosts'}</span>
+    <span>{$hostSummary.total} {$hostSummary.total === 1 ? $t('statusbar.host_singular') : $t('statusbar.host_plural')}</span>
     <span class="flex items-center gap-1.5">
-      <StatusDot status="ok" label="online" />{$hostSummary.online} online
+      <StatusDot status="ok" label={$t('statusbar.online')} />{$hostSummary.online} {$t('statusbar.online')}
     </span>
     <span class="flex items-center gap-1.5">
-      <StatusDot status="warn" label="alert" />{$hostSummary.alert} alert
+      <StatusDot status="warn" label={$t('statusbar.alert')} />{$hostSummary.alert} {$t('statusbar.alert')}
     </span>
     <span class="flex items-center gap-1.5">
-      <StatusDot status="off" label="offline" />{$hostSummary.offline} offline
+      <StatusDot status="off" label={$t('statusbar.offline')} />{$hostSummary.offline} {$t('statusbar.offline')}
     </span>
   </div>
 </footer>

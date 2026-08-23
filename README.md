@@ -1,172 +1,97 @@
 <div align="center">
 
-# OmnySSH
+# OmnySSH 简体中文版 🇨🇳
 
-### Every server you manage, in one window. Dashboard, terminal, SFTP, snippets.
+### 现代化 TUI / GUI SSH 服务器管理工具 —— 仪表盘、终端、SFTP、命令片段全集成
 
 <img src="assets/gui.webp" alt="OmnySSH GUI dashboard" width="900">
 
-[![Downloads](https://img.shields.io/github/downloads/timhartmann7/omnyssh/total?label=total%20installs&color=2ea44f)](https://github.com/timhartmann7/omnyssh/releases)
-[![Latest release](https://img.shields.io/github/v/release/timhartmann7/omnyssh?label=latest)](https://github.com/timhartmann7/omnyssh/releases/latest)
-[![Stars](https://img.shields.io/github/stars/timhartmann7/omnyssh?style=flat)](https://github.com/timhartmann7/omnyssh/stargazers)
+[![Upstream Sync](https://img.shields.io/badge/Upstream-timhartmann7%2Fomnyssh-blue?logo=github)](https://github.com/timhartmann7/omnyssh)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Build](https://img.shields.io/github/actions/workflow/status/timhartmann7/omnyssh/ci.yml?branch=main)](https://github.com/timhartmann7/omnyssh/actions)
+[![GitHub stars](https://img.shields.io/github/stars/AnonyJcy/omnyssh-cn?style=social)](https://github.com/AnonyJcy/omnyssh-cn/stargazers)
+[![Language](https://img.shields.io/badge/Language-Rust%20%7C%20Svelte%205-orange.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen)]()
 
-**[Install](#install)** •
-**[Features](#features)** •
-**[SSH keys](#ssh-key-setup)** •
-**[Comparison](#comparison)** •
-**[TUI version](#the-tui-version)** •
-**[Telegram](#dev-notes)**
+**[功能特性](#主要功能特性)** •
+**[安装与使用](#安装与使用)** •
+**[自动化同步说明](#自动化同步与维护)** •
+**[致敬上游](#致敬原作者与开源协议)** •
+**[English README](#english-readme)**
 
 </div>
 
 ---
 
-## Install
+## 📖 项目简介
 
-One command on macOS and Linux:
+**OmnySSH 简体中文版** 是基于官方上游 [timhartmann7/omnyssh](https://github.com/timhartmann7/omnyssh) 深度定制的中文本地化与增强分支。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/timhartmann7/omnyssh/main/install.sh | sh
-```
-
-The script detects your OS and architecture and installs the latest desktop build — into `/Applications` on macOS, your app menu on Linux. Want the terminal app instead, or both? `curl … | sh -s -- --tui` (or `--both`). Prefer clicking? Grab the file for your platform from [**Releases**](https://github.com/timhartmann7/omnyssh/releases/latest).
-
-| Platform | File |
-|----------|------|
-| macOS Apple Silicon | `OmnySSH-aarch64-apple-darwin.dmg` |
-| macOS Intel | `OmnySSH-x86_64-apple-darwin.dmg` |
-| Linux x86_64 | `OmnySSH-x86_64.AppImage` / `.deb` / `.rpm` |
-| Windows x86_64 | `OmnySSH-x86_64-setup.exe` |
-
-No account, no login screen, no telemetry. The app opens with an empty dashboard and reads your existing `~/.ssh/config` if you have one — hosts behind a bastion (`ProxyJump`) included.
+本项目针对中文开发者环境进行了全方位的本地化支持，引入了轻量级、无侵入的 **多语言国际化（i18n）架构**，内置全套简体中文（zh-CN）语言包，并配置了 **GitHub Actions 每日自动同步官方上游代码** 的自动化流水线，让你可以随时体验最新官方特性并享受舒适的中文界面。
 
 ---
 
-## What it does
+## ⚡ 主要功能特性
 
+- 🖥️ **实时服务器仪表盘**：单个窗口统一监控多台 VPS/服务器，直观展示 CPU、内存、磁盘使用率进度条、运行时间、操作系统及 Docker 等服务运行状态。
+- 💻 **内置多标签终端 (PTY)**：基于 xterm 的高性能全功能终端，支持分屏会话与后台无缝切换。
+- 📁 **双栏式 SFTP 文件传输**：左侧本地、右侧远程，支持批量上传、下载、新建目录、文件重命名与文件快速预览，告别繁琐的 `scp` 命令。
+- 🚀 **命令片段与多机广播**：保存高频 Shell 运维命令，支持动态参数插值（`{{service}}`），并支持一键向选中的多台服务器并发广播执行。
+- 🔑 **自动化 SSH 密钥免密配置**：一键生成 Ed25519 密钥、分发公钥、验证连接并安全禁用密码认证，全自动回滚机制保障服务器安全。
+- 🔍 **⌘K 全局快速命令面板**：键盘驱动，快速搜索与切换主机和活动会话。
+- 🎥 **主播/隐私模式 (Streamer Mode)**：一键对界面中所有敏感主机名与 IP 地址进行安全脱敏，适合录屏与直播演示。
+- 🌐 **多语言随时切换**：在“设置 (Settings)”中可随时自由切换 **简体中文** 与 **English**。
+
+---
+
+## 📦 安装与使用
+
+### GUI 桌面客户端
+
+前往 [**Releases 发行版页面**](https://github.com/AnonyJcy/omnyssh-cn/releases) 下载对应平台的安装包：
+
+| 操作系统平台 | 文件格式 | 说明 |
+|-------------|----------|------|
+| **Windows x86_64** | `OmnySSH-x86_64-setup.exe` / `.msi` | 适用于 64 位 Windows 系统 |
+| **macOS (Apple Silicon)** | `OmnySSH-aarch64-apple-darwin.dmg` | 适用于 M1/M2/M3/M4 系列芯片 |
+| **macOS (Intel)** | `OmnySSH-x86_64-apple-darwin.dmg` | 适用于 Intel 处理器 Mac |
+| **Linux x86_64** | `OmnySSH-x86_64.AppImage` / `.deb` / `.rpm` | 通用 Linux 发行版 |
+
+> **无账号、无遥测、无数据上传**：应用本地运行，自动读取你的 `~/.ssh/config` 配置，隐私安全。
+
+---
+
+## 🔄 自动化同步与维护
+
+本项目通过 GitHub Actions 实现了与官方上游仓库的自动化跟踪：
+1. **每日定时同步**：北京时间每天 10:00 自动检查并合并官方 `main` 分支的最新提交。
+2. **语言包彻底隔离**：翻译字典独立存放在 `$lib/i18n/locales/`，合并上游核心业务代码时极低冲突率。
+
+---
+
+## 🤝 致敬原作者与开源协议
+
+- **官方上游仓库**：[timhartmann7/omnyssh](https://github.com/timhartmann7/omnyssh)
+- **开源协议**：[Apache License 2.0](LICENSE)
+- 感谢原作者 **Tim Hartmann**（[@timhartmann7](https://github.com/timhartmann7)）打造了如此优秀的开源 SSH 管理神器！
+
+---
+
+<div id="english-readme"></div>
+
+## English README
+
+<details>
+<summary>Click to expand original English description</summary>
+
+### What it does
 You add a server once. After that it sits on the dashboard as a card with live CPU, RAM and disk, uptime, distro, the top processes eating your CPU, and a badge for what runs on it. One click on `sh` drops you into a real PTY terminal. One click on `files` opens a two panel SFTP browser. Ten servers fit on one screen and refresh on their own.
 
-### Live dashboard
-Cards for every host with CPU, RAM and disk bars, uptime, OS version, top processes, and a Docker badge showing how many containers are up. Bars turn yellow, then red, so a sick server is obvious from across the room.
+- **Live dashboard**: Cards for every host with CPU, RAM and disk bars, uptime, OS version, top processes, and a Docker badge.
+- **Real terminals**: Full PTY sessions in tabs.
+- **Two panel SFTP**: Local on the left, remote on the right.
+- **Snippets**: Save shell commands and broadcast across multiple hosts.
+- **Search everything**: ⌘K fuzzy finder for hosts and open sessions.
+- **Streamer mode**: Masks real IPs with fakes for safe screencasting.
+- **Multi-language support**: Switch between English and Simplified Chinese seamlessly in Settings.
 
-### Real terminals
-Full PTY sessions in tabs. Open as many servers as you need, switch between them from the sidebar, and keep them running while you work in the dashboard.
-
-### Two panel SFTP
-Local on the left, remote on the right. Tick the files you want and move them across, watch the progress bar, select many at once. Nobody remembers `scp -r` syntax anyway.
-
-### Snippets
-Save the commands you paste every week. Pick a snippet, tick the hosts to send it to, and it runs on all of them at once. Snippets take parameters, so `sudo systemctl restart {{service}}` asks you for the name.
-
-### Search everything
-Hit ⌘K and start typing. Every host you have, plus every session already open. Enter drops you into a terminal on the host you picked, or back into the session you left.
-
-### Streamer mode
-Swaps every real IP on screen for a fake one. Record a demo or share your screen without leaking client infrastructure.
-
-### Light and dark themes
-Both ship in the app. Switch from the sidebar.
-
-### Small
-Around 130 MB of RAM with several sessions open, on a 20 MB download. Termius on the same machine, doing nothing, sat at 649 MB across nine processes. Full numbers in the [comparison](#comparison).
-
----
-
-## SSH key setup
-
-Password auth on a fresh VPS is the thing you always mean to fix and never do. OmnySSH does it in one click.
-
-Pick a host you added yourself that has no key configured, hit **Set up SSH key**, and the app generates an Ed25519 key, appends the public half to `authorized_keys`, and switches the host over to key auth. It then opens a fresh connection with the new key to prove the key works, and only after that does it turn password login off. There is no confirmation step in between: starting the flow means going through with it.
-
-Before touching `sshd_config` it saves a backup on the server. If any step fails, it restores the backup and leaves your access exactly as it was. Your private key never leaves your machine, and nothing gets sent anywhere except the server you chose.
-
-The code lives in [`crates/omnyssh-core/src/ssh/key_setup.rs`](crates/omnyssh-core/src/ssh/key_setup.rs). Read it before you point this at production. That is the whole point of shipping it open source.
-
----
-
-## Comparison
-
-Memory and CPU measured on an M4 Mac with both apps open and idle.
-
-| | OmnySSH | Termius | tmux + ssh |
-|---|---|---|---|
-| RAM at idle | ~130 MB | ~649 MB | tiny |
-| Processes | 4 | 9 | 1 |
-| Live metrics dashboard | ✅ | ✅ | ❌ |
-| Two panel SFTP | ✅ | ✅ | ❌ |
-| Snippets and broadcast | ✅ | ✅ | ❌ |
-| One click key setup | ✅ | ❌ | ❌ |
-| Account required | ❌ | ✅ | ❌ |
-| Telemetry | ❌ | ✅ | ❌ |
-| Open source | ✅ | ❌ | ✅ |
-| Price | free | 💰 | free |
-
-tmux stays in the table because it is what most of us actually use. It wins on weight and loses on everything visual.
-
----
-
-## The TUI version
-
-OmnySSH started in the terminal, and the TUI is still here, still maintained, still gets releases.
-
-![Demo](assets/demo.gif)
-
-Same engine underneath: the repo is a cargo workspace where `crates/omnyssh-core` holds the logic and the frontends sit on top. Dashboard, SFTP, snippets, multi session tabs, fuzzy search, plus four themes (`default`, `dracula`, `nord`, `gruvbox`) and remappable keys in `config.toml`.
-
-[![Crates.io](https://img.shields.io/crates/v/omnyssh.svg)](https://crates.io/crates/omnyssh)
-[![Crates downloads](https://img.shields.io/crates/d/omnyssh.svg)](https://crates.io/crates/omnyssh)
-
-```bash
-# cargo
-cargo install omnyssh
-
-# homebrew
-brew install timhartmann7/tap/omnyssh
-
-# nix
-nix run github:timhartmann7/omnyssh
-```
-
-Then run `omny`. Press `a` to add a host, `/` to search, `?` for help, `Shift+K` to set up keys on the selected host.
-
-Prebuilt TUI binaries for Linux, macOS, Windows and Termux live on the [Releases](https://github.com/timhartmann7/omnyssh/releases) page under the `omny-*` files. Config sits in `~/.config/omnyssh/` on Linux, `~/Library/Application Support/omnyssh/` on macOS, `%APPDATA%\omnyssh\` on Windows. Your `~/.ssh/config` is read at startup and never written to.
-
-Full options, keybindings and config examples: `man omny`.
-
----
-
-## Dev notes
-
-I write about what I am building on Telegram. Release notes, work in progress screenshots, benchmarks, and the things that broke on the way there. Usually before they show up anywhere else.
-
-### 👉 [**t.me/timhartmanndev**](https://t.me/timhartmanndev)
-
----
-
-## Contributing
-
-Pull requests welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, the conventions and the checklist. Open an issue first if you plan something big, so we do not both build it.
-
-Workspace layout:
-
-```
-crates/omnyssh-core   engine, frontend agnostic
-crates/omnyssh        TUI application (binary: omny)
-crates/omnyssh-gui    Tauri desktop application
-```
-
-## License
-
-Apache 2.0. See [LICENSE](LICENSE).
-
-<div align="center">
-
-### ⭐ Star the repo if OmnySSH saved you a terminal tab
-
-[Report a bug](https://github.com/timhartmann7/omnyssh/issues) •
-[Request a feature](https://github.com/timhartmann7/omnyssh/issues) •
-[Discussions](https://github.com/timhartmann7/omnyssh/discussions)
-
-</div>
+</details>
