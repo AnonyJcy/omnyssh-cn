@@ -4,7 +4,9 @@
 
 ### 现代化 TUI / GUI SSH 服务器管理工具 —— 仪表盘、终端、SFTP、命令片段全集成
 
-<img src="assets/gui.webp" alt="OmnySSH GUI dashboard" width="900">
+<a href="https://github.com/AnonyJcy/omnyssh-cn">
+  <img src="assets/gui-preview.png" alt="OmnySSH 简体中文版仪表盘" width="900">
+</a>
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/AnonyJcy/omnyssh-cn?style=social)](https://github.com/AnonyJcy/omnyssh-cn/stargazers)
