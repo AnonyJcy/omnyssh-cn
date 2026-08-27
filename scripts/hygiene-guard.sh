@@ -3,7 +3,7 @@
 # environment file is tracked in git. Scans the tracked tree of the current repo
 # (git ls-files), so `git add`-ing a forbidden file turns this red; a clean tree
 # is green. See tech-gui.md §0.0 / §11.5 and CLAUDE.md for the rule set.
-set -eo pipefail
+set -e -o pipefail
 shopt -s nocasematch # catch forbidden names regardless of case
 
 # Instruction/design docs that must never be committed (§11.5).

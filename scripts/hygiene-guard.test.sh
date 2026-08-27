@@ -3,7 +3,7 @@
 # forbidden file (instruction doc, .env, updater key, embedded private key) turns
 # it red regardless of case, and it fails closed outside a git repo.
 # See tech-gui.md §0.0.
-set -eo pipefail
+set -e -o pipefail
 
 guard="$(cd "$(dirname "$0")" && pwd)/hygiene-guard.sh"
 work="$(mktemp -d)"

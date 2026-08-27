@@ -14,7 +14,7 @@
   import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { hosts } from '$lib/stores/hosts';
   import { lastError } from '$lib/stores/notifications';
-  import { saveHost, deleteHost, reloadHosts, startKeySetup, refreshMetrics } from '$lib/ipc/commands';
+  import { saveHost, deleteHost, reloadHosts, startKeySetup, restorePasswordAuth, refreshMetrics } from '$lib/ipc/commands';
   import { isRefreshHotkey } from '$lib/stores/ui';
   import { beginKeySetup, dismissKeySetup } from '$lib/stores/keySetup';
   import { emptyForm, formFromHost } from './hostForm';
@@ -22,7 +22,11 @@
   import Modal from '$lib/components/Modal.svelte';
   import { t } from '$lib/i18n';
 
-  type Dialog = { kind: 'add' } | { kind: 'edit'; host: HostDto } | { kind: 'delete'; host: HostDto };
+  type Dialog =
+    | { kind: 'add' }
+    | { kind: 'edit'; host: HostDto }
+    | { kind: 'delete'; host: HostDto }
+    | { kind: 'restorePassword'; host: HostDto };
 
   let dialog = $state<Dialog | null>(null);
 
@@ -103,6 +107,21 @@
       lastError.set(message(e));
     }
     dialog = null;
+  }
+
+  let restoringPassword = $state(false);
+  async function confirmRestorePassword(name: string): Promise<void> {
+    if (restoringPassword) return;
+    restoringPassword = true;
+    try {
+      await restorePasswordAuth(name);
+      await reloadHosts();
+      dialog = null;
+    } catch (e) {
+      lastError.set(message(e));
+    } finally {
+      restoringPassword = false;
+    }
   }
 
   // Shared pill used by the header/empty-state "Add host" and the per-card quick actions.
@@ -265,6 +284,17 @@
                   <Icon name="key" size={14} />
                 </button>
               {/if}
+              {#if card.host.source === 'manual' && (card.host.passwordAuthDisabled || card.host.hasKey)}
+                <button
+                  type="button"
+                  class={iconBtn}
+                  title={$t('dashboard.restore_password_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
+                  aria-label={$t('dashboard.restore_password_title', { name: displayHostTitle(card.host.name, $streamerMode, card.host.hostname) })}
+                  onclick={() => (dialog = { kind: 'restorePassword', host: card.host })}
+                >
+                  <Icon name="unlock" size={14} />
+                </button>
+              {/if}
               <!-- Editing an import adopts it into hosts.toml (§4.2); ~/.ssh/config is
                    never written, so the action is offered whatever the source. Delete
                    stays manual-only: there is nothing of an import to remove here. -->
@@ -407,6 +437,28 @@
       <div class="flex justify-end gap-2 pt-1">
         <Button variant="ghost" onclick={() => (dialog = null)}>{$t('dashboard.cancel')}</Button>
         <Button variant="primary" onclick={() => confirmDelete(host.name)}>{$t('dashboard.delete')}</Button>
+      </div>
+    </div>
+  </Modal>
+{:else if dialog?.kind === 'restorePassword'}
+  {@const host = dialog.host}
+  <Modal label={$t('dashboard.restore_password_modal_title')} onClose={() => (!restoringPassword ? (dialog = null) : undefined)}>
+    <div class="space-y-3 px-5 py-4">
+      <div class="flex items-center gap-2.5">
+        <Icon name="unlock" size={16} />
+        <h2 class="text-sm font-semibold">{$t('dashboard.restore_password_modal_title')}</h2>
+      </div>
+      <p class="text-sm text-muted">
+        {$t('dashboard.restore_password_confirm', { name: host.name })}
+      </p>
+      <p class="text-xs text-faint">
+        {$t('dashboard.restore_password_hint')}
+      </p>
+      <div class="flex justify-end gap-2 pt-1">
+        <Button variant="ghost" disabled={restoringPassword} onclick={() => (dialog = null)}>{$t('dashboard.cancel')}</Button>
+        <Button variant="primary" disabled={restoringPassword} onclick={() => confirmRestorePassword(host.name)}>
+          {restoringPassword ? $t('dashboard.restoring_password') : $t('dashboard.restore_password_btn')}
+        </Button>
       </div>
     </div>
   </Modal>

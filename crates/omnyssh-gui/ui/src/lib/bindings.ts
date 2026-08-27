@@ -298,6 +298,22 @@ async startKeySetup(hostName: string) : Promise<Result<null, CommandError>> {
 }
 },
 /**
+ * Restore password authentication for `host_name`.
+ * 
+ * Connects to the host using existing authentication, modifies SSH configuration
+ * to set `PasswordAuthentication yes` and `UsePAM yes` (compatible with both
+ * sshd_config and sshd_config.d/*.conf), verifies syntax with `sshd -t`, and reloads sshd.
+ * Keeps existing SSH keys and authorized_keys intact.
+ */
+async restorePasswordAuth(hostName: string) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("restore_password_auth", { hostName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Trigger an immediate metric poll of every host (tech-gui.md §4.2). Used by the
  * settings-driven refresh cadence (§4.3); a no-op before the pollers start.
  */

@@ -90,6 +90,9 @@
     <path d="M10.85 12.15 19 4" />
     <path d="M18 5l2 2" />
     <path d="M15 8l2 2" />
+  {:else if name === 'unlock'}
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 9.9-1" />
   {:else if name === 'shield'}
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
     <polyline points="9 12 11 14 15 10" />

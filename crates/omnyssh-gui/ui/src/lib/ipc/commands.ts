@@ -178,6 +178,12 @@ export async function startKeySetup(hostName: string): Promise<void> {
   if (res.status === 'error') throw new Error(res.error.message);
 }
 
+/** Restore password authentication for a host. Re-enables PasswordAuthentication yes while keeping SSH keys intact. */
+export async function restorePasswordAuth(hostName: string): Promise<void> {
+  const res = await commands.restorePasswordAuth(hostName);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
 /** Force an immediate metric poll of every host (tech-gui.md §4.2). */
 export async function refreshMetrics(): Promise<void> {
   const res = await commands.refreshMetrics();

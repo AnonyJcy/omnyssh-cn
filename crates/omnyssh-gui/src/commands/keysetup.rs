@@ -164,3 +164,46 @@ async fn persist_key(host_name: &str, key_path: &str, password_disabled: bool) {
     })
     .await;
 }
+
+/// Restore password authentication for `host_name`.
+///
+/// Connects to the host using existing authentication, modifies SSH configuration
+/// to set `PasswordAuthentication yes` and `UsePAM yes` (compatible with both
+/// sshd_config and sshd_config.d/*.conf), verifies syntax with `sshd -t`, and reloads sshd.
+/// Keeps existing SSH keys and authorized_keys intact.
+#[tauri::command]
+#[specta::specta]
+pub async fn restore_password_auth(
+    state: State<'_, GuiState>,
+    host_name: String,
+) -> Result<(), CommandError> {
+    let host = state.host_by_name(&host_name).ok_or_else(|| CommandError {
+        message: format!("unknown host '{host_name}'"),
+    })?;
+
+    let session = SshSession::connect(&host).await.map_err(|e| CommandError {
+        message: format!("Connection failed: {e}"),
+    })?;
+
+    let outcome =
+        omnyssh_core::ssh::key_setup::restore_password_auth_for_host(&host, &session).await;
+    session.disconnect().await;
+
+    outcome.map_err(|e| CommandError {
+        message: format!("{e:#}"),
+    })?;
+
+    persist_password_restored(&host.name).await;
+    Ok(())
+}
+
+async fn persist_password_restored(host_name: &str) {
+    let name = host_name.to_string();
+    let _ = tauri::async_runtime::spawn_blocking(move || -> Option<()> {
+        let mut hosts = load_hosts().ok()?;
+        let host = hosts.iter_mut().find(|h| h.name == name)?;
+        host.password_auth_disabled = Some(false);
+        save_hosts(&hosts).ok()
+    })
+    .await;
+}

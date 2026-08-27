@@ -7,6 +7,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## 1.1.4 — 2026-08-28
+
+### 新特性 (Features)
+- **支持一键「恢复密码登录」功能**：
+  - 在主机卡片操作区中新增「恢复密码登录」按钮，点击后弹出统一风格的确认弹窗。
+  - 安全将远程服务器 SSH 的 `PasswordAuthentication` 恢复为 `yes`，并同步更新 `UsePAM`、`ChallengeResponseAuthentication` 及 `KbdInteractiveAuthentication`。
+  - 自动解除 `#Include /etc/ssh/sshd_config.d/` 注释，并深度兼容 `/etc/ssh/sshd_config.d/*.conf`（如 cloud-init 配置）。
+  - 执行前自动创建带时间戳的配置文件备份，并在修改后使用 `sudo sshd -t` 进行严格语法检验，检验失败自动秒级回滚，成功后再重载（reload）SSH 服务。
+  - 完整保留现有 SSH 密钥与 `~/.ssh/authorized_keys`，绝不影响公钥登录。
+
+---
+
 ## 1.1.3 — 2026-08-24
 
 ### 问题修复 (Bug Fixes)

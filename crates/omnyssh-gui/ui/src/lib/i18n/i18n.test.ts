@@ -25,6 +25,12 @@ describe('i18n module', () => {
     expect(translate('en', 'dashboard.no_match', { query: 'test-server' })).toBe(
       'No hosts match “test-server”.'
     );
+    expect(translate('zh-CN', 'dashboard.restore_password_title', { name: 'prod-server' })).toBe(
+      '恢复 prod-server 的密码登录'
+    );
+    expect(translate('en', 'dashboard.restore_password_title', { name: 'prod-server' })).toBe(
+      'Restore password login for prod-server'
+    );
   });
 
   it('reactive t store reflects locale changes', () => {

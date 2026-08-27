@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, zh-cn]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, zh-cn]
 
 env:
   CARGO_TERM_COLOR: always

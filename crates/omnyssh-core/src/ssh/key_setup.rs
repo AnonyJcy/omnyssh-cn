@@ -446,6 +446,87 @@ pub fn build_disable_password_command() -> String {
     )
 }
 
+/// Builds the command to restore password authentication in sshd_config.
+///
+/// The command:
+/// - Checks for sudo access
+/// - Creates a timestamped backup of sshd_config
+/// - Re-enables Include directives for sshd_config.d/* if previously commented
+/// - Restores PasswordAuthentication, UsePAM, ChallengeResponseAuthentication, and KbdInteractiveAuthentication to yes
+/// - Updates any /etc/ssh/sshd_config.d/*.conf override files to allow password auth
+/// - Preserves PubkeyAuthentication and authorized_keys untouched
+/// - Validates the config with `sshd -t` (rolls back on failure)
+///
+/// Returns the command string.
+pub fn build_restore_password_command() -> String {
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let password = force_sshd_directive("PasswordAuthentication", "yes");
+    let challenge = force_sshd_directive("ChallengeResponseAuthentication", "yes");
+    let kbd = force_sshd_directive("KbdInteractiveAuthentication", "yes");
+    let pam = force_sshd_directive("UsePAM", "yes");
+
+    format!(
+        r#"sudo -n true 2>/dev/null || {{ echo "OMNYSSH_NO_SUDO"; exit 1; }}; \
+           sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.omnyssh_backup.{timestamp} && \
+           sudo sed -i.bak 's|^#\?Include /etc/ssh/sshd_config.d/|Include /etc/ssh/sshd_config.d/|' /etc/ssh/sshd_config && \
+           {password} && \
+           {challenge} && \
+           {kbd} && \
+           {pam} && \
+           if [ -d /etc/ssh/sshd_config.d ]; then \
+               for f in /etc/ssh/sshd_config.d/*.conf; do \
+                   if [ -f "$f" ]; then \
+                       sudo sed -i.bak 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$f" && \
+                       sudo sed -i.bak 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' "$f" && \
+                       sudo sed -i.bak 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' "$f" && \
+                       sudo sed -i.bak 's/^#\?UsePAM.*/UsePAM yes/' "$f"; \
+                   fi; \
+               done; \
+           fi && \
+           sudo sshd -t || {{ echo "OMNYSSH_CONFIG_ERROR"; sudo cp /etc/ssh/sshd_config.omnyssh_backup.{timestamp} /etc/ssh/sshd_config; exit 1; }}"#
+    )
+}
+
+/// Restores password authentication for a host.
+///
+/// Modifies `/etc/ssh/sshd_config` and any overriding `/etc/ssh/sshd_config.d/*.conf` files
+/// to enable `PasswordAuthentication yes` and `UsePAM yes`.
+/// Validates the new configuration with `sshd -t` and reloads the SSH daemon.
+/// Existing SSH keys and `authorized_keys` are untouched.
+pub async fn restore_password_auth_for_host(
+    _host: &Host,
+    session: &SshSession,
+) -> Result<()> {
+    // 1. Check sudo access.
+    match session.run_command_checked("sudo -n true 2>/dev/null").await {
+        Ok(_) => {}
+        Err(_) => {
+            anyhow::bail!("Sudo access is required to restore password authentication");
+        }
+    }
+
+    // 2. Execute restore command.
+    let restore_cmd = build_restore_password_command();
+    let output = time::timeout(STEP_TIMEOUT, session.run_command(&restore_cmd))
+        .await
+        .map_err(|_| anyhow!("Timed out while updating SSH configuration"))??;
+
+    if output.contains("OMNYSSH_NO_SUDO") {
+        anyhow::bail!("Sudo access is required to restore password authentication");
+    }
+    if output.contains("OMNYSSH_CONFIG_ERROR") {
+        anyhow::bail!("sshd configuration test (sshd -t) failed; original configuration was restored");
+    }
+
+    // 3. Reload SSH daemon.
+    let reload_cmd = build_reload_sshd_command();
+    time::timeout(STEP_TIMEOUT, session.run_command(&reload_cmd))
+        .await
+        .map_err(|_| anyhow!("Timed out while reloading SSH daemon"))??;
+
+    Ok(())
+}
+
 /// Builds the shell fragment that forces `sshd_config` to set `directive value`.
 ///
 /// First rewrites every existing column-0 occurrence (commented or not) to the
@@ -992,5 +1073,27 @@ mod tests {
         // Should use reload, not restart.
         assert!(cmd.contains("reload"));
         assert!(!cmd.contains("restart"));
+    }
+
+    #[test]
+    fn test_restore_password_command_restores_directives_and_includes() {
+        let cmd = build_restore_password_command();
+
+        // Should create timestamped backup.
+        assert!(cmd.contains("omnyssh_backup."));
+        // Should run sshd -t for validation.
+        assert!(cmd.contains("sshd -t"));
+        // Should restore Include directive for sshd_config.d.
+        assert!(cmd.contains("'s|^#\\?Include /etc/ssh/sshd_config.d/|Include /etc/ssh/sshd_config.d/|'"));
+        // Should restore password auth and PAM.
+        assert!(cmd.contains("PasswordAuthentication yes"));
+        assert!(cmd.contains("ChallengeResponseAuthentication yes"));
+        assert!(cmd.contains("KbdInteractiveAuthentication yes"));
+        assert!(cmd.contains("UsePAM yes"));
+        // Should update sshd_config.d/*.conf override files if present.
+        assert!(cmd.contains("/etc/ssh/sshd_config.d/*.conf"));
+        // Should NOT disable PubkeyAuthentication or authorized_keys.
+        assert!(!cmd.contains("PubkeyAuthentication no"));
+        assert!(!cmd.contains("authorized_keys"));
     }
 }

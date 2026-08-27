@@ -23,6 +23,7 @@ export type IconName =
   | 'download'
   | 'refresh'
   | 'key'
+  | 'unlock'
   | 'shield'
   | 'settings'
   | 'telegram'
