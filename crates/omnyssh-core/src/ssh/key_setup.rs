@@ -493,12 +493,12 @@ pub fn build_restore_password_command() -> String {
 /// to enable `PasswordAuthentication yes` and `UsePAM yes`.
 /// Validates the new configuration with `sshd -t` and reloads the SSH daemon.
 /// Existing SSH keys and `authorized_keys` are untouched.
-pub async fn restore_password_auth_for_host(
-    _host: &Host,
-    session: &SshSession,
-) -> Result<()> {
+pub async fn restore_password_auth_for_host(_host: &Host, session: &SshSession) -> Result<()> {
     // 1. Check sudo access.
-    match session.run_command_checked("sudo -n true 2>/dev/null").await {
+    match session
+        .run_command_checked("sudo -n true 2>/dev/null")
+        .await
+    {
         Ok(_) => {}
         Err(_) => {
             anyhow::bail!("Sudo access is required to restore password authentication");
@@ -515,7 +515,9 @@ pub async fn restore_password_auth_for_host(
         anyhow::bail!("Sudo access is required to restore password authentication");
     }
     if output.contains("OMNYSSH_CONFIG_ERROR") {
-        anyhow::bail!("sshd configuration test (sshd -t) failed; original configuration was restored");
+        anyhow::bail!(
+            "sshd configuration test (sshd -t) failed; original configuration was restored"
+        );
     }
 
     // 3. Reload SSH daemon.
@@ -1084,7 +1086,8 @@ mod tests {
         // Should run sshd -t for validation.
         assert!(cmd.contains("sshd -t"));
         // Should restore Include directive for sshd_config.d.
-        assert!(cmd.contains("'s|^#\\?Include /etc/ssh/sshd_config.d/|Include /etc/ssh/sshd_config.d/|'"));
+        assert!(cmd
+            .contains("'s|^#\\?Include /etc/ssh/sshd_config.d/|Include /etc/ssh/sshd_config.d/|'"));
         // Should restore password auth and PAM.
         assert!(cmd.contains("PasswordAuthentication yes"));
         assert!(cmd.contains("ChallengeResponseAuthentication yes"));
