@@ -28,7 +28,7 @@ jobs:
       - name: Fetch and Merge Upstream
         run: |
           git remote add upstream https://github.com/timhartmann7/omnyssh.git || true
-          git fetch upstream main --tags
+          git fetch upstream main --no-tags
           
           # Attempt auto-merge of upstream main into zh-cn
           git merge upstream/main -m "chore(sync): merge upstream changes into zh-cn" || {

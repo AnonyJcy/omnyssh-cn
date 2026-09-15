@@ -23,3 +23,4 @@ crates/omnyssh-gui/ui/playwright-report/
 crates/omnyssh-gui/ui/playwright/.cache/
 *.tauri.key
 *.exe
+/.mnemon/
