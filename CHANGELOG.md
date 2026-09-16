@@ -7,6 +7,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## 1.1.5 — 2026-09-15
+
+### 优化与修复 (Improvements & Fixes)
+- **CI 与自动化构建流程优化**：
+  - 修复 `bindings.ts` 跨平台换行符（CRLF/LF）导致的 TypeScript 绑定一致性校验漂移问题。
+  - 优化定时同步工作流，拉取上游仓库时禁用标签覆盖选项，避免本地版本发布 Tag 冲突导致自动同步失败。
+  - 优化 `.gitignore`，补充过滤本地开发临时目录。
+
+---
+
 ## 1.1.4 — 2026-08-28
 
 ### 新特性 (Features)
