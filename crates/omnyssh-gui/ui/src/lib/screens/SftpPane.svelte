@@ -1,29 +1,73 @@
 <script lang="ts">
-  // One side of the dual-pane SFTP browser (tech-gui.md §3.2): a current-path header
-  // with a parent-supplied toolbar, then the entry list. Clicking a directory (or the
-  // `..` row) navigates; clicking a file previews; the leading checkbox marks it for a
-  // batch transfer/delete. Semantic tokens only — no colour literals (§5.1).
+  // One side of the dual-pane SFTP browser (tech-gui.md §3.2): an interactive
+  // current-path header with quick-access buttons and a parent-supplied toolbar,
+  // then the entry list. Clicking a directory (or the `..` row) navigates; clicking
+  // a file previews; clicking the path allows manual input and navigation.
   import type { Snippet } from 'svelte';
-  import { Icon } from '$lib/theme';
+  import { Icon, type IconName } from '$lib/theme';
   import type { FileEntryDto } from '$lib/bindings';
   import { formatBytes, type Pane } from '$lib/stores/sftp';
   import { t } from '$lib/i18n';
 
+  export type ShortcutLocation = {
+    label: string;
+    path: string;
+    icon?: IconName;
+  };
+
   let {
     title,
     pane,
+    shortcuts = [],
     onNavigate,
+    onNavigatePath,
     onToggleMark,
     onPreview,
     toolbar
   }: {
     title: string;
     pane: Pane;
+    shortcuts?: ShortcutLocation[];
     onNavigate: (entry: FileEntryDto) => void;
+    onNavigatePath?: (path: string) => void;
     onToggleMark: (path: string) => void;
     onPreview: (entry: FileEntryDto) => void;
     toolbar?: Snippet;
   } = $props();
+
+  let isEditing = $state(false);
+  let editValue = $state('');
+  let pathInput = $state<HTMLInputElement>();
+
+  function startEditing(): void {
+    editValue = pane.path || '';
+    isEditing = true;
+    requestAnimationFrame(() => {
+      pathInput?.focus();
+      pathInput?.select();
+    });
+  }
+
+  function cancelEditing(): void {
+    isEditing = false;
+  }
+
+  function submitEditing(): void {
+    const trimmed = editValue.trim();
+    if (trimmed && onNavigatePath) {
+      onNavigatePath(trimmed);
+    }
+    isEditing = false;
+  }
+
+  function normalize(p: string): string {
+    return p.replace(/[\\/]+$/, '').toLowerCase();
+  }
+
+  function isSameLocation(a?: string, b?: string): boolean {
+    if (!a || !b) return false;
+    return normalize(a) === normalize(b);
+  }
 
   const rowBase =
     'flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition ' +
@@ -43,9 +87,97 @@
         {@render toolbar?.()}
       </div>
     </div>
-    <div class="mt-1 truncate font-mono text-xs text-faint" title={pane.path}>
-      {pane.path || '—'}
-    </div>
+
+    <!-- Path Bar (editable address bar) -->
+    {#if isEditing}
+      <form
+        class="mt-2 flex items-center gap-1.5"
+        onsubmit={(e) => {
+          e.preventDefault();
+          submitEditing();
+        }}
+      >
+        <div class="relative flex min-w-0 flex-1 items-center">
+          <input
+            bind:this={pathInput}
+            bind:value={editValue}
+            type="text"
+            class="w-full rounded-md border border-accent bg-surface-inset px-2.5 py-1 font-mono text-xs text-fg outline-none focus:ring-1 focus:ring-accent"
+            placeholder={$t('sftp.path_placeholder')}
+            onkeydown={(e) => {
+              if (e.key === 'Escape') cancelEditing();
+            }}
+          />
+        </div>
+        <button
+          type="submit"
+          class="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-default text-muted transition hover:border-strong hover:bg-surface-inset hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          title={$t('sftp.go_to_path')}
+          aria-label={$t('sftp.go_to_path')}
+        >
+          <Icon name="check" size={13} />
+        </button>
+        <button
+          type="button"
+          class="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-default text-muted transition hover:border-strong hover:bg-surface-inset hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+          title={$t('sftp.cancel')}
+          aria-label={$t('sftp.cancel')}
+          onclick={cancelEditing}
+        >
+          <Icon name="close" size={13} />
+        </button>
+      </form>
+    {:else}
+      <div
+        role="button"
+        tabindex="0"
+        class="group mt-2 flex items-center justify-between gap-2 rounded-md border border-default/40 bg-surface-inset/50 px-2.5 py-1 font-mono text-xs text-muted transition hover:border-default hover:bg-surface-inset cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        title={$t('sftp.click_to_edit_path')}
+        onclick={startEditing}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            startEditing();
+          }
+        }}
+      >
+        <div class="flex min-w-0 items-center gap-1.5 flex-1">
+          <span class="text-faint transition group-hover:text-muted shrink-0">
+            <Icon name="folder" size={13} />
+          </span>
+          <span class="truncate text-fg" title={pane.path}>
+            {pane.path || '—'}
+          </span>
+        </div>
+        <span
+          class="shrink-0 text-faint opacity-50 transition group-hover:opacity-100 group-hover:text-muted"
+          title={$t('sftp.click_to_edit_path')}
+        >
+          <Icon name="edit" size={12} />
+        </span>
+      </div>
+    {/if}
+
+    <!-- Quick Access Location Buttons -->
+    {#if shortcuts.length > 0}
+      <div class="mt-2 flex flex-wrap items-center gap-1.5">
+        {#each shortcuts as sc (sc.path)}
+          {@const active = isSameLocation(pane.path, sc.path)}
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus
+              {active
+                ? 'border border-accent/40 bg-accent/15 text-accent font-semibold shadow-sm'
+                : 'border border-default/70 text-muted hover:border-strong hover:bg-surface-inset hover:text-fg'}"
+            title={sc.path}
+            onclick={() => onNavigatePath?.(sc.path)}
+          >
+            {#if sc.icon}<Icon name={sc.icon} size={11} />{/if}
+            <span>{sc.label}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">

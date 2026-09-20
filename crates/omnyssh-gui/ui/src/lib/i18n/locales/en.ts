@@ -177,6 +177,14 @@ export const en = {
   'sftp.file_preview': 'File preview',
   'sftp.empty_file': 'Empty file.',
   'sftp.close': 'Close',
+  'sftp.desktop': 'Desktop',
+  'sftp.downloads': 'Downloads',
+  'sftp.documents': 'Documents',
+  'sftp.home_dir': 'Home',
+  'sftp.root_dir': 'Root',
+  'sftp.path_placeholder': 'Enter path and press Enter…',
+  'sftp.go_to_path': 'Go to path',
+  'sftp.click_to_edit_path': 'Click to edit path',
 
   // Terminal
   'terminal.reconnect': 'Reconnect',

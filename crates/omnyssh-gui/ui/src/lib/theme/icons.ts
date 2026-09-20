@@ -25,6 +25,9 @@ export type IconName =
   | 'key'
   | 'unlock'
   | 'shield'
+  | 'desktop'
+  | 'home'
+  | 'document'
   | 'settings'
   | 'telegram'
   | 'star';

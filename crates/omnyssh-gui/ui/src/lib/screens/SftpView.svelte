@@ -6,8 +6,8 @@
   // `sftp-*` events, §3.4). Local browsing uses list_local_dir (returns directly);
   // remote uses sftp_list (arrives as an event). Semantic tokens only (§5.1).
   import { onMount, onDestroy } from 'svelte';
-  import { homeDir } from '@tauri-apps/api/path';
-  import { Icon } from '$lib/theme';
+  import { homeDir, desktopDir, downloadDir, documentDir } from '@tauri-apps/api/path';
+  import { Icon, type IconName } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
   import SftpPane from './SftpPane.svelte';
   import type { FileEntryDto } from '$lib/bindings';
@@ -88,14 +88,110 @@
     void sftpList(id, path).catch((err) => sftp.paneError(id, 'remote', errMsg(err)));
   }
 
+  type ShortcutLocation = {
+    label: string;
+    path: string;
+    icon?: IconName;
+  };
+
+  let localDirPaths = $state<{
+    desktop?: string;
+    downloads?: string;
+    documents?: string;
+    home?: string;
+    root?: string;
+  }>({});
+
+  const localShortcuts = $derived.by<ShortcutLocation[]>(() => {
+    const sc: ShortcutLocation[] = [];
+    if (localDirPaths.desktop) {
+      sc.push({ label: $t('sftp.desktop'), path: localDirPaths.desktop, icon: 'desktop' });
+    }
+    if (localDirPaths.downloads) {
+      sc.push({ label: $t('sftp.downloads'), path: localDirPaths.downloads, icon: 'download' });
+    }
+    if (localDirPaths.documents) {
+      sc.push({ label: $t('sftp.documents'), path: localDirPaths.documents, icon: 'document' });
+    }
+    if (localDirPaths.home) {
+      sc.push({ label: $t('sftp.home_dir'), path: localDirPaths.home, icon: 'home' });
+    }
+    if (localDirPaths.root) {
+      sc.push({
+        label: localDirPaths.root === '/' ? $t('sftp.root_dir') : localDirPaths.root,
+        path: localDirPaths.root,
+        icon: 'folder'
+      });
+    }
+    return sc;
+  });
+
+  const remoteShortcuts = $derived<ShortcutLocation[]>([
+    { label: $t('sftp.root_dir'), path: '/', icon: 'folder' },
+    { label: '/home', path: '/home', icon: 'home' },
+    { label: '/var/log', path: '/var/log', icon: 'folder' },
+    { label: '/etc', path: '/etc', icon: 'settings' },
+    { label: '/tmp', path: '/tmp', icon: 'folder' }
+  ]);
+
+  function resolveLocalInputPath(input: string): string {
+    let p = input.trim();
+    if (/^[a-zA-Z]:$/.test(p)) {
+      p += '\\';
+    } else if (localDirPaths.home && (p === '~' || p.startsWith('~/') || p.startsWith('~\\'))) {
+      const rest = p.slice(1).replace(/^[\\/]/, '');
+      const sep = p.includes('\\') || (localDirPaths.home && localDirPaths.home.includes('\\')) ? '\\' : '/';
+      p = rest ? `${localDirPaths.home}${sep}${rest}` : localDirPaths.home;
+    }
+    return p;
+  }
+
   onMount(() => {
     void (async () => {
-      let home = '/';
+      let desktop = '';
+      let downloads = '';
+      let documents = '';
+      let home = '';
+
+      try {
+        desktop = await desktopDir();
+      } catch {}
+      try {
+        downloads = await downloadDir();
+      } catch {}
+      try {
+        documents = await documentDir();
+      } catch {}
       try {
         home = await homeDir();
       } catch {
         home = '/';
       }
+
+      const clean = (p?: string) => (p ? p.replace(/[\\/]+$/, '') : '');
+      desktop = clean(desktop);
+      downloads = clean(downloads);
+      documents = clean(documents);
+      home = clean(home);
+
+      const ref = home || desktop || '';
+      const isWindows = ref.includes('\\') || /^[a-zA-Z]:/.test(ref);
+      let root = '/';
+      if (isWindows) {
+        const match = ref.match(/^([a-zA-Z]:)/);
+        root = match ? `${match[1]}\\` : 'C:\\';
+      }
+
+      localDirPaths = {
+        desktop: desktop || undefined,
+        downloads: downloads || undefined,
+        documents: documents || undefined,
+        home: home || undefined,
+        root: root || undefined
+      };
+
+      const initialLocal = desktop || home || root || '/';
+
       if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
         return;
       }
@@ -114,7 +210,7 @@
       }
       backendId = id;
       sftp.open(id, session.hostName);
-      void refreshLocal(home);
+      void refreshLocal(initialLocal);
       refreshRemote('/');
     })();
   });
@@ -299,7 +395,9 @@
       <SftpPane
         title={$t('sftp.local')}
         pane={view.local}
+        shortcuts={localShortcuts}
         onNavigate={(e) => navigate('local', e)}
+        onNavigatePath={(p) => refreshLocal(resolveLocalInputPath(p))}
         onToggleMark={(p) => toggleMark('local', p)}
         onPreview={(e) => preview('local', e)}
       >
@@ -329,7 +427,9 @@
       <SftpPane
         title={displayHostTitle(session.hostName, $streamerMode)}
         pane={view.remote}
+        shortcuts={remoteShortcuts}
         onNavigate={(e) => navigate('remote', e)}
+        onNavigatePath={(p) => refreshRemote(p)}
         onToggleMark={(p) => toggleMark('remote', p)}
         onPreview={(e) => preview('remote', e)}
       >

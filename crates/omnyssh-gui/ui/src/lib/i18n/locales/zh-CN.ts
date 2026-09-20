@@ -179,6 +179,14 @@ export const zhCN: Record<TranslationKey, string> = {
   'sftp.file_preview': '文件预览',
   'sftp.empty_file': '空文件。',
   'sftp.close': '关闭',
+  'sftp.desktop': '桌面',
+  'sftp.downloads': '下载',
+  'sftp.documents': '文档',
+  'sftp.home_dir': '主目录',
+  'sftp.root_dir': '根目录',
+  'sftp.path_placeholder': '输入路径并按回车…',
+  'sftp.go_to_path': '前往路径',
+  'sftp.click_to_edit_path': '点击修改路径',
 
   // Terminal
   'terminal.reconnect': '重新连接',
