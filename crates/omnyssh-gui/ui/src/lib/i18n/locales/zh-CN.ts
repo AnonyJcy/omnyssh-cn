@@ -187,6 +187,10 @@ export const zhCN: Record<TranslationKey, string> = {
   'sftp.path_placeholder': '输入路径并按回车…',
   'sftp.go_to_path': '前往路径',
   'sftp.click_to_edit_path': '点击修改路径',
+  'sftp.hide_lnk': '隐藏 .lnk',
+  'sftp.show_lnk': '显示 .lnk',
+  'sftp.hide_lnk_tooltip': '隐藏 Windows 快捷方式 (.lnk 文件)',
+  'sftp.show_lnk_tooltip': '显示 Windows 快捷方式 (.lnk 文件)',
 
   // Terminal
   'terminal.reconnect': '重新连接',

@@ -185,6 +185,10 @@ export const en = {
   'sftp.path_placeholder': 'Enter path and press Enter…',
   'sftp.go_to_path': 'Go to path',
   'sftp.click_to_edit_path': 'Click to edit path',
+  'sftp.hide_lnk': 'Hide .lnk',
+  'sftp.show_lnk': 'Show .lnk',
+  'sftp.hide_lnk_tooltip': 'Hide Windows shortcuts (.lnk files)',
+  'sftp.show_lnk_tooltip': 'Show Windows shortcuts (.lnk files)',
 
   // Terminal
   'terminal.reconnect': 'Reconnect',

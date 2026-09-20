@@ -28,6 +28,8 @@ export type IconName =
   | 'desktop'
   | 'home'
   | 'document'
+  | 'eye'
+  | 'eyeOff'
   | 'settings'
   | 'telegram'
   | 'star';

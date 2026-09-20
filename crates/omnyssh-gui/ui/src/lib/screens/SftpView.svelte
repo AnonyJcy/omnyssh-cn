@@ -100,6 +100,7 @@
     documents?: string;
     home?: string;
     root?: string;
+    isWindows?: boolean;
   }>({});
 
   const localShortcuts = $derived.by<ShortcutLocation[]>(() => {
@@ -187,7 +188,8 @@
         downloads: downloads || undefined,
         documents: documents || undefined,
         home: home || undefined,
-        root: root || undefined
+        root: root || undefined,
+        isWindows
       };
 
       const initialLocal = desktop || home || root || '/';
@@ -396,6 +398,7 @@
         title={$t('sftp.local')}
         pane={view.local}
         shortcuts={localShortcuts}
+        isWindows={localDirPaths.isWindows}
         onNavigate={(e) => navigate('local', e)}
         onNavigatePath={(p) => refreshLocal(resolveLocalInputPath(p))}
         onToggleMark={(p) => toggleMark('local', p)}

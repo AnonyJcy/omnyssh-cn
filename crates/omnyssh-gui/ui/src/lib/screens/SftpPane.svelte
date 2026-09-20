@@ -19,6 +19,7 @@
     title,
     pane,
     shortcuts = [],
+    isWindows = false,
     onNavigate,
     onNavigatePath,
     onToggleMark,
@@ -28,6 +29,7 @@
     title: string;
     pane: Pane;
     shortcuts?: ShortcutLocation[];
+    isWindows?: boolean;
     onNavigate: (entry: FileEntryDto) => void;
     onNavigatePath?: (path: string) => void;
     onToggleMark: (path: string) => void;
@@ -38,6 +40,38 @@
   let isEditing = $state(false);
   let editValue = $state('');
   let pathInput = $state<HTMLInputElement>();
+
+  let hideLnk = $state(
+    typeof window !== 'undefined'
+      ? (localStorage.getItem('omnyssh.sftp.hide_lnk') ?? 'true') === 'true'
+      : true
+  );
+
+  function toggleHideLnk(): void {
+    hideLnk = !hideLnk;
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('omnyssh.sftp.hide_lnk', String(hideLnk));
+      } catch {}
+    }
+  }
+
+  const isWin = $derived(
+    isWindows ||
+      (pane.path ? pane.path.includes('\\') || /^[a-zA-Z]:/.test(pane.path) : false) ||
+      (typeof navigator !== 'undefined' && /win/i.test(navigator.platform || navigator.userAgent))
+  );
+
+  const lnkFilesCount = $derived(
+    pane.entries.filter((e) => !e.isDir && e.name.toLowerCase().endsWith('.lnk')).length
+  );
+
+  const visibleEntries = $derived.by(() => {
+    if (isWin && hideLnk) {
+      return pane.entries.filter((e) => e.name === '..' || e.isDir || !e.name.toLowerCase().endsWith('.lnk'));
+    }
+    return pane.entries;
+  });
 
   function startEditing(): void {
     editValue = pane.path || '';
@@ -84,6 +118,22 @@
         {title}
       </h2>
       <div class="flex shrink-0 items-center gap-1">
+        {#if isWin}
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus {hideLnk
+              ? 'border-accent/40 bg-accent/15 text-accent font-semibold'
+              : 'border-default text-muted hover:border-strong hover:bg-surface-inset hover:text-fg'}"
+            title={hideLnk ? $t('sftp.show_lnk_tooltip') : $t('sftp.hide_lnk_tooltip')}
+            onclick={toggleHideLnk}
+          >
+            <Icon name={hideLnk ? 'eyeOff' : 'eye'} size={13} />
+            <span>.lnk</span>
+            {#if lnkFilesCount > 0}
+              <span class="ml-0.5 rounded px-1 text-[10px] opacity-75 {hideLnk ? 'bg-accent/20' : 'bg-surface-inset'}">{lnkFilesCount}</span>
+            {/if}
+          </button>
+        {/if}
         {@render toolbar?.()}
       </div>
     </div>
@@ -185,11 +235,11 @@
       <p class="px-2 py-6 text-center text-sm text-status-crit">{pane.error}</p>
     {:else if pane.loading && pane.entries.length === 0}
       <p class="px-2 py-6 text-center text-sm text-faint">{$t('sftp.loading')}</p>
-    {:else if pane.entries.length === 0}
+    {:else if visibleEntries.length === 0}
       <p class="px-2 py-6 text-center text-sm text-faint">{$t('sftp.empty_directory')}</p>
     {:else}
       <ul class="space-y-0.5">
-        {#each pane.entries as entry, i (i)}
+        {#each visibleEntries as entry, i (i)}
           {@const isParent = entry.name === '..'}
           {@const marked = pane.marked.has(entry.path)}
           <li class="flex items-center gap-1.5">
