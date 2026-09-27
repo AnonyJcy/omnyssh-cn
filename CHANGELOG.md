@@ -7,7 +7,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Unreleased
+## 1.1.3 — 2026-09-27
 
 ### Features
 - **Forward local ports over SSH, like `ssh -L`.** A service that listens only on a server's loopback, or on a machine only that server can reach, such as a web admin panel or a database, can now be reached at a port on your own machine. Add forwards to a host in the host editor of the desktop app or the host form of the terminal app (`port:host:hostport`, the `ssh -L` notation), or let OmnySSH read the host's `LocalForward` lines from `~/.ssh/config`. The local port listens on this machine only unless you give it an address such as `0.0.0.0`, and the remote host is resolved by the server, so `localhost` is the server itself. One tunnel per host carries all of its ports, and tunnels on any number of hosts can run at once. Start and stop one from the dashboard card, or with `f` in the terminal app, and a host can be set to start its tunnel when OmnySSH opens. A dropped connection is redialled with a backoff while the local ports stay bound, so no other program takes them in the meantime; a rejected login or a changed host key stops the tunnel instead. Hosts behind a `ProxyJump` bastion work the same way. Remote (`-R`) and SOCKS (`-D`) forwarding are not included.
