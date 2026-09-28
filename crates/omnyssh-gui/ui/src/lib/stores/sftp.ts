@@ -92,6 +92,13 @@ export function markedEntries(pane: Pane): FileEntryDto[] {
   return pane.entries.filter((e) => pane.marked.has(e.path));
 }
 
+/** The root in `roots` that `path` lies under, or '' for none (a network share).
+ *  Drive letters compare case-insensitively, as Windows does. */
+export function rootOf(path: string, roots: string[]): string {
+  const lower = path.toLowerCase();
+  return roots.find((root) => lower.startsWith(root.toLowerCase())) ?? '';
+}
+
 /** Human-readable byte size for a listing row or a transfer bar. */
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

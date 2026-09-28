@@ -11,8 +11,8 @@ use omnyssh_core::event::CoreEvent;
 use omnyssh_core::ssh::identity;
 use omnyssh_core::ssh::password::Prompter;
 use omnyssh_core::ssh::sftp::{
-    list_local_dir as core_list_local_dir, preview_local_file as core_preview_local_file,
-    SftpCommand, SftpManager,
+    list_local_dir as core_list_local_dir, local_roots,
+    preview_local_file as core_preview_local_file, SftpCommand, SftpManager,
 };
 
 use crate::bridge;
@@ -179,10 +179,19 @@ pub fn sftp_close(state: State<'_, GuiState>, session_id: u64) -> Result<(), Com
 #[tauri::command]
 #[specta::specta]
 pub async fn list_local_dir(path: String) -> Result<Vec<FileEntryDto>, CommandError> {
+    // The whole chain: the OS reason ("Access is denied") is the useful part.
     let entries = core_list_local_dir(&path).await.map_err(|e| CommandError {
-        message: e.to_string(),
+        message: format!("{e:#}"),
     })?;
     Ok(entries.iter().map(FileEntryDto::from).collect())
+}
+
+/// The roots the local pane can switch to: every drive letter on Windows, `/`
+/// elsewhere (tech-gui.md §4.2).
+#[tauri::command]
+#[specta::specta]
+pub fn list_local_roots() -> Vec<String> {
+    local_roots()
 }
 
 /// Read up to 4 KiB of a local file as UTF-8 for preview (tech-gui.md §4.2).

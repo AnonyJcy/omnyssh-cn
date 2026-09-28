@@ -3215,6 +3215,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "vt100-omnyssh",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

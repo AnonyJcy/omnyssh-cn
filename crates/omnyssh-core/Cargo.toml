@@ -54,6 +54,10 @@ flate2 = "1"
 tar = "0.4"
 self-replace = "1"
 
+# The drive letters the local file panes can switch to. Already built for tokio.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = "3"

@@ -7,17 +7,22 @@
   // is identical on every OS; the open list stays the platform's, which is the point
   // of using a real `<select>` (keyboard, screen readers, touch all keep working).
   import type { Snippet } from 'svelte';
+  import type { HTMLSelectAttributes } from 'svelte/elements';
 
   let {
     value = $bindable(),
     class: className = '',
-    children
-  }: { value: string; class?: string; children: Snippet } = $props();
+    children,
+    ...rest
+  }: { value: string; class?: string; children: Snippet } & Omit<
+    HTMLSelectAttributes,
+    'value' | 'class' | 'children'
+  > = $props();
 </script>
 
 <span class="relative block">
   <!-- `pr-9` keeps the longest option clear of the chevron. -->
-  <select bind:value class="{className} appearance-none pr-9">
+  <select bind:value {...rest} class="{className} appearance-none pr-9">
     {@render children()}
   </select>
   <svg
