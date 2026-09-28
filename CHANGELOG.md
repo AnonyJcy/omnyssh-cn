@@ -7,7 +7,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Unreleased
+## 1.1.4 — 2026-09-28
 
 ### Bug Fixes
 - **macOS: the app from the `.dmg` opens instead of being "damaged".** It carried only the signature the linker puts on the executable, which does not cover the rest of the app, so macOS called a downloaded copy damaged and offered no way to open it. The whole app is now signed, ad hoc, and macOS shows its usual warning for an app it cannot verify: open it once from System Settings, Privacy & Security, Open Anyway. The app is still not notarized. A copy installed with `install.sh` was never affected.
