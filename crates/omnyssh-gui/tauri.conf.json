@@ -40,6 +40,9 @@
         ]
       }
     },
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "category": "Utility",
     "shortDescription": "Native GUI for the OmnySSH engine",
     "longDescription": "OmnySSH Desktop — SSH dashboard, terminal, and SFTP file manager.",

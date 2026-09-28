@@ -173,9 +173,9 @@ jobs:
   #
   # Native Tauri bundles, renamed to stable `omnyssh-gui-<target>.<ext>` names so
   # install.sh can build download URLs the same way it does for the TUI. macOS
-  # ships unsigned (a documented one-time Gatekeeper bypass). Linux is x86_64 only
-  # — the webkit cross-compile for ARM is out of scope, and ARM/Termux users have
-  # the TUI.
+  # ships ad-hoc signed, not notarized (a documented one-time Gatekeeper bypass).
+  # Linux is x86_64 only — the webkit cross-compile for ARM is out of scope, and
+  # ARM/Termux users have the TUI.
   #
   #   macos-latest   → aarch64-apple-darwin   (native)        → .dmg
   #   macos-latest   → x86_64-apple-darwin    (cross)         → .dmg
@@ -289,6 +289,17 @@ jobs:
           version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
           # An empty version would make the check below match anything.
           [ -n "$version" ] || { echo "no version in Cargo.toml"; exit 1; }
+          # Gatekeeper calls a downloaded app "damaged", with no way past it, when its
+          # signature does not seal the bundle: what the linker leaves on the binary
+          # alone. So the app users get, inside the dmg, has to verify.
+          verify_dmg() {
+            local mnt status=0
+            mnt="$(mktemp -d)"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$1" >/dev/null
+            codesign --verify --deep --strict --verbose=2 "$mnt"/*.app || status=$?
+            hdiutil detach "$mnt" >/dev/null
+            return "$status"
+          }
           collect() {
             local files=("$out/$1"/*"$2")
             [ -e "${files[0]}" ] || { echo "no $2 bundle"; exit 1; }
@@ -302,7 +313,8 @@ jobs:
           # stops emitting one fails the dry run instead of only the tag.
           for format in ${BUNDLES//,/ }; do
             case "$format" in
-              dmg)      collect dmg      .dmg      "${{ matrix.asset }}.dmg" ;;
+              dmg)      collect dmg      .dmg      "${{ matrix.asset }}.dmg"
+                        verify_dmg "${{ matrix.asset }}.dmg" ;;
               appimage) collect appimage .AppImage "${{ matrix.asset }}.AppImage" ;;
               deb)      collect deb      .deb      "${{ matrix.asset }}.deb" ;;
               rpm)      collect rpm      .rpm      "${{ matrix.asset }}.rpm" ;;
