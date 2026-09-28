@@ -526,6 +526,10 @@ impl App {
                 self.fm_parent_dir().await;
             }
 
+            AppAction::FmNextDrive => {
+                self.fm_next_drive().await;
+            }
+
             AppAction::FmToggleHidden => {
                 let panel = self.active_fm_panel_mut();
                 panel.show_hidden = !panel.show_hidden;

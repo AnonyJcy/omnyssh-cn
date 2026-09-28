@@ -114,6 +114,8 @@ pub enum AppAction {
     FmEnterDir,
     /// Navigate to the parent directory (Backspace).
     FmParentDir,
+    /// Move the local panel to the next drive (d; Windows has one per letter).
+    FmNextDrive,
     /// Toggle the marked state of the entry under the cursor (Space).
     FmMarkFile,
     /// Open the host-picker popup to connect the remote panel (H).

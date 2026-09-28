@@ -230,6 +230,12 @@ pub fn render_help(frame: &mut Frame, theme: &Theme) {
         Span::styled("  .", key_style),
         Span::styled("        Toggle hidden", desc_style),
     ]));
+    if cfg!(windows) {
+        col2_lines.push(Line::from(vec![
+            Span::styled("  d", key_style),
+            Span::styled("        Next drive", desc_style),
+        ]));
+    }
     col2_lines.push(Line::from(""));
 
     col2_lines.push(Line::from(Span::styled(" SNIPPETS", section_style)));

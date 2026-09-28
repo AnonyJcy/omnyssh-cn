@@ -140,6 +140,7 @@ pub fn handle_input(key: KeyEvent, view: &mut ViewState) -> Option<AppAction> {
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => Some(AppAction::FmEnterDir),
         KeyCode::Char('h') | KeyCode::Left => Some(AppAction::FmParentDir),
         KeyCode::Backspace => Some(AppAction::FmParentDir),
+        KeyCode::Char('d') => Some(AppAction::FmNextDrive),
         KeyCode::Char(' ') => Some(AppAction::FmMarkFile),
         KeyCode::Tab => Some(AppAction::FmSwitchPanel),
         KeyCode::Char('c') => Some(AppAction::FmCopy),
@@ -159,7 +160,7 @@ pub fn handle_input(key: KeyEvent, view: &mut ViewState) -> Option<AppAction> {
 // ---------------------------------------------------------------------------
 
 fn render_hints_header(frame: &mut Frame, area: Rect, theme: &crate::ui::theme::Theme) {
-    let hints = Line::from(vec![
+    let mut hints = Line::from(vec![
         Span::styled(
             " hjkl",
             Style::default()
@@ -240,6 +241,19 @@ fn render_hints_header(frame: &mut Frame, area: Rect, theme: &crate::ui::theme::
         ),
         Span::styled(":Host", Style::default().fg(theme.text_muted)),
     ]);
+    // Only Windows has more than one root to switch between.
+    if cfg!(windows) {
+        hints.spans.extend([
+            Span::raw("  "),
+            Span::styled(
+                "d",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(":Drive", Style::default().fg(theme.text_muted)),
+        ]);
+    }
 
     frame.render_widget(Paragraph::new(hints), area);
 }
