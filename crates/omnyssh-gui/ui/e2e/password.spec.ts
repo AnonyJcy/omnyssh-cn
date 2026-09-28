@@ -59,6 +59,8 @@ async function boot(page: Page): Promise<void> {
               return new Promise((resolve, reject) => {
                 waiting = (ok) => (ok ? resolve(11) : reject({ message: 'SFTP SSH connect: SSH login cancelled for nas' }));
               });
+            case 'list_local_roots':
+              return Promise.resolve(['/']);
             case 'answer_password': {
               const { requestId, password } = args as { requestId: number; password: string | null };
               // Only the request the stub issued last is waited on, as in the core.

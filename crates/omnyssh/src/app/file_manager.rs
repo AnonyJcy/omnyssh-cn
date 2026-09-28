@@ -432,6 +432,34 @@ impl App {
         }
     }
 
+    /// Moves the local panel to the next drive: on Windows `..` stops at the root
+    /// of the drive it is on. A drive that does not list (an empty card reader)
+    /// is passed over, so it cannot hide the ones after it.
+    pub(crate) async fn fm_next_drive(&mut self) {
+        let next = roots_after(&sftp::local_roots(), &self.view.file_manager.local.cwd);
+        if next.is_empty() {
+            self.view.status_message = Some("No other drives".to_string());
+            return;
+        }
+        self.view.file_manager.active_panel = FmPanel::Local;
+        let tx = self.core_tx.clone();
+        tokio::spawn(async move {
+            let mut failure = None;
+            for path in next {
+                match sftp::list_local_dir(&path).await {
+                    Ok(entries) => {
+                        let _ = tx.send(CoreEvent::LocalDirListed { path, entries }).await;
+                        return;
+                    }
+                    Err(e) => failure = Some(format!("{e:#}")),
+                }
+            }
+            if let Some(failure) = failure {
+                let _ = tx.send(CoreEvent::Error(failure)).await;
+            }
+        });
+    }
+
     /// Pastes all clipboard contents into the active panel (upload / download).
     ///
     /// All files are queued as individual SFTP commands and processed sequentially
@@ -628,9 +656,37 @@ fn filename_of(path: &str) -> String {
         .to_string()
 }
 
+/// The other roots in the order `d` visits them: those after the one `cwd` is
+/// on, then round to those before it; all of them when it is on none.
+fn roots_after(roots: &[String], cwd: &str) -> Vec<String> {
+    let cwd = cwd.to_lowercase();
+    match roots
+        .iter()
+        .position(|root| cwd.starts_with(&root.to_lowercase()))
+    {
+        Some(at) => roots[at + 1..]
+            .iter()
+            .chain(&roots[..at])
+            .cloned()
+            .collect(),
+        None if roots.len() > 1 => roots.to_vec(),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_drive_wraps_and_ignores_case() {
+        let roots: Vec<String> = ["C:\\", "D:\\", "E:\\"].map(String::from).to_vec();
+        assert_eq!(roots_after(&roots, "d:\\Media"), ["E:\\", "C:\\"]);
+        assert_eq!(roots_after(&roots, "E:\\"), ["C:\\", "D:\\"]);
+        // A network share is on no drive: every drive is next.
+        assert_eq!(roots_after(&roots, "\\\\nas\\share"), roots);
+        assert!(roots_after(&["/".to_string()], "/home").is_empty());
+    }
 
     fn entry(name: &str, path: &str) -> FileEntry {
         FileEntry {

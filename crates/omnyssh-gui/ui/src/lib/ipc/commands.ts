@@ -165,6 +165,11 @@ export async function listLocalDir(path: string): Promise<FileEntryDto[]> {
   return res.data;
 }
 
+/** The roots the local pane can switch to: drive letters on Windows, `/` elsewhere. */
+export async function listLocalRoots(): Promise<string[]> {
+  return commands.listLocalRoots();
+}
+
 /** Read up to 4 KiB of a local file as UTF-8 for preview. */
 export async function previewLocalFile(path: string): Promise<string> {
   const res = await commands.previewLocalFile(path);

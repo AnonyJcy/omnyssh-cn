@@ -27,12 +27,14 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use russh::client::{self, Handle};
+use russh::keys::key::PublicKey;
 use russh::ChannelMsg;
 use tokio::sync::watch;
 use tokio::time;
 
 use crate::ssh::client::Host;
 use crate::ssh::identity::{self, IdentityError};
+use crate::ssh::known_hosts::{self, Verdict};
 use crate::ssh::password::{self, AskPassword, Method, NoAnswer, Prompt};
 
 // ---------------------------------------------------------------------------
@@ -42,9 +44,9 @@ use crate::ssh::password::{self, AskPassword, Method, NoAnswer, Prompt};
 /// Shared russh client handler used by every native SSH path (metrics, SFTP,
 /// terminal).
 ///
-/// Verifies the server's host key against `~/.ssh/known_hosts`.
-/// Unknown hosts are recorded on first connection (trust on first use);
-/// changed keys are rejected.
+/// Verifies the server's host key against `~/.ssh/known_hosts` (see
+/// [`known_hosts`]). Unknown hosts are recorded on first connection (trust on
+/// first use); changed keys are rejected.
 pub(crate) struct KnownHostsHandler {
     /// Hostname used for known_hosts lookup.
     host: String,
@@ -58,6 +60,9 @@ pub(crate) struct KnownHostsHandler {
     no_method: Arc<AtomicBool>,
     /// The fingerprint of a host key first seen, and recorded, on this connection.
     new_key: Arc<Mutex<Option<String>>>,
+    /// Why the host key was turned down, for the user; russh itself only says
+    /// "Unknown server key".
+    refusal: Arc<Mutex<Option<String>>>,
     /// Whether this connection lends the local agent (`ssh -A`). Only a
     /// terminal's target does; any other gets its agent channels closed.
     lends_agent: bool,
@@ -73,6 +78,7 @@ struct Link {
     hung_up: Arc<AtomicBool>,
     no_method: Arc<AtomicBool>,
     new_key: Arc<Mutex<Option<String>>>,
+    refusal: Arc<Mutex<Option<String>>>,
     /// Changes (to closed) once the session is over.
     ended: watch::Receiver<()>,
 }
@@ -84,6 +90,19 @@ impl Link {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+
+    /// The error for a handshake that failed: a turned-down host key says why.
+    fn connect_error(&self, e: russh::Error) -> anyhow::Error {
+        let refusal = self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        match (e, refusal) {
+            (russh::Error::UnknownKey, Some(why)) => Refused(why).into(),
+            (e, _) => anyhow::Error::new(e).context("SSH connection failed"),
+        }
+    }
 }
 
 #[async_trait]
@@ -94,24 +113,20 @@ impl client::Handler for KnownHostsHandler {
         &mut self,
         server_public_key: &russh::keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
-            // Key is in known_hosts and matches.
-            Ok(true) => Ok(true),
+        let fingerprint = format!("SHA256:{}", server_public_key.fingerprint());
+        let refusal = match known_hosts::check(&self.host, self.port, server_public_key) {
+            Verdict::Known => return Ok(true),
             // Host not seen before — record the key (trust on first use) so a
             // later key change is detected, then accept. Recording is
             // best-effort: a connection must not fail just because
             // known_hosts is unwritable.
-            Ok(false) => {
+            Verdict::Unknown => {
                 tracing::warn!(
                     host = %self.host,
                     port = self.port,
                     "Accepting unknown host key for {} (Trust On First Use)", self.host
                 );
-                match russh::keys::known_hosts::learn_known_hosts(
-                    &self.host,
-                    self.port,
-                    server_public_key,
-                ) {
+                match known_hosts::learn(&self.host, self.port, server_public_key) {
                     Ok(()) => tracing::info!(
                         host = %self.host,
                         port = self.port,
@@ -126,30 +141,34 @@ impl client::Handler for KnownHostsHandler {
                 *self
                     .new_key
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some(format!("SHA256:{}", server_public_key.fingerprint()));
-                Ok(true)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
+                return Ok(true);
             }
             // A previously recorded key changed — refuse; possible MITM.
-            Err(russh::keys::Error::KeyChanged { .. }) => {
+            Verdict::Changed(file) => {
                 tracing::warn!(
                     host = %self.host,
                     port = self.port,
                     "server key mismatch in known_hosts — possible MITM attack, refusing connection"
                 );
-                Ok(false)
+                known_hosts::changed_message(&self.host, self.port, &file, &fingerprint)
             }
             // Unreadable or corrupt known_hosts — fail closed rather than
             // accept an unverified key.
-            Err(e) => {
+            Verdict::Unreadable(file, e) => {
                 tracing::warn!(
                     host = %self.host,
                     error = %e,
                     "known_hosts check failed; refusing connection"
                 );
-                Ok(false)
+                known_hosts::unreadable_message(&self.host, self.port, &file, &e)
             }
-        }
+        };
+        *self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
+        Ok(false)
     }
 
     async fn disconnected(
@@ -622,7 +641,6 @@ async fn connect_chain(
     lends_agent: bool,
 ) -> anyhow::Result<SshConnection> {
     let chain = jump_chain(host).await?;
-    let config = client_config();
 
     // Walk the bastions outward: the first is reached directly, every later one
     // through its predecessor. The target then rides the last hop.
@@ -630,8 +648,8 @@ async fn connect_chain(
     for (i, hop) in chain.iter().enumerate() {
         let key = login_key(hop, &chain[..i]);
         let handle = match jumps.last() {
-            None => connect_direct(&config, hop, &key, &mut passwords, false).await,
-            Some(via) => connect_tunnelled(&config, via, hop, &key, &mut passwords, false).await,
+            None => connect_direct(hop, &key, &mut passwords, false).await,
+            Some(via) => connect_tunnelled(via, hop, &key, &mut passwords, false).await,
         }
         .map_err(|e| at_hop(e, format!("ProxyJump via '{}' failed", hop.name)))?;
         jumps.push(handle);
@@ -639,12 +657,10 @@ async fn connect_chain(
 
     let key = login_key(host, &chain);
     let handle = match (jumps.last(), chain.last()) {
-        (Some(via), Some(last)) => {
-            connect_tunnelled(&config, via, host, &key, &mut passwords, lends_agent)
-                .await
-                .map_err(|e| at_hop(e, format!("connecting via '{}' failed", last.name)))?
-        }
-        _ => connect_direct(&config, host, &key, &mut passwords, lends_agent).await?,
+        (Some(via), Some(last)) => connect_tunnelled(via, host, &key, &mut passwords, lends_agent)
+            .await
+            .map_err(|e| at_hop(e, format!("connecting via '{}' failed", last.name)))?,
+        _ => connect_direct(host, &key, &mut passwords, lends_agent).await?,
     };
 
     Ok(SshConnection {
@@ -669,9 +685,14 @@ pub(crate) async fn connect_budget(host: &Host) -> Duration {
     (CONNECT_TIMEOUT + AGENT_BUDGET) * (hops as u32 + 1)
 }
 
-/// The shared russh client configuration (timeouts + keepalives).
-fn client_config() -> Arc<client::Config> {
+/// The russh client configuration for one hop: timeouts, keepalives, and the
+/// host key types already saved for it first.
+fn client_config(host: &Host) -> Arc<client::Config> {
     Arc::new(client::Config {
+        preferred: russh::Preferred {
+            key: known_hosts::preferred(&host.hostname, host.port),
+            ..russh::Preferred::DEFAULT
+        },
         // No inactivity timeout: russh skips resetting it on the iteration that
         // sends a keepalive, so a peer that never answers `keepalive@openssh.com`
         // (common in appliance SSH stacks) was torn down after 30 s even while
@@ -716,13 +737,12 @@ async fn jump_chain(host: &Host) -> anyhow::Result<Vec<Host>> {
 
 /// Opens a TCP connection to `host` and authenticates.
 async fn connect_direct(
-    config: &Arc<client::Config>,
     host: &Host,
     key: &str,
     passwords: &mut Passwords<'_>,
     lends_agent: bool,
 ) -> anyhow::Result<Handle<KnownHostsHandler>> {
-    let dial = || dial_direct(config, host, lends_agent);
+    let dial = || dial_direct(host, lends_agent);
     finish_auth(dial().await?, host, key, dial, passwords).await
 }
 
@@ -730,14 +750,13 @@ async fn connect_direct(
 /// channel on the bastion carries a second SSH session to the target, which is
 /// verified and authenticated in its own right.
 async fn connect_tunnelled(
-    config: &Arc<client::Config>,
     via: &Handle<KnownHostsHandler>,
     host: &Host,
     key: &str,
     passwords: &mut Passwords<'_>,
     lends_agent: bool,
 ) -> anyhow::Result<Handle<KnownHostsHandler>> {
-    let dial = || dial_tunnelled(config, via, host, lends_agent);
+    let dial = || dial_tunnelled(via, host, lends_agent);
     finish_auth(dial().await?, host, key, dial, passwords).await
 }
 
@@ -773,20 +792,16 @@ impl Dialed {
 }
 
 /// Opens a TCP connection to `host` and verifies its host key.
-async fn dial_direct(
-    config: &Arc<client::Config>,
-    host: &Host,
-    lends_agent: bool,
-) -> anyhow::Result<Dialed> {
+async fn dial_direct(host: &Host, lends_agent: bool) -> anyhow::Result<Dialed> {
     let addr = format!("{}:{}", host.hostname, host.port);
     let (handler, link) = known_hosts_handler(host, lends_agent);
     let handle = time::timeout(
         CONNECT_TIMEOUT,
-        client::connect(Arc::clone(config), addr, handler),
+        client::connect(client_config(host), addr, handler),
     )
     .await
     .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
-    .context("SSH connection failed")?;
+    .map_err(|e| link.connect_error(e))?;
     Ok(Dialed {
         handle,
         link,
@@ -798,7 +813,6 @@ async fn dial_direct(
 /// Opens a `direct-tcpip` channel to `host` on the bastion `via` and runs the
 /// SSH handshake over it.
 async fn dial_tunnelled(
-    config: &Arc<client::Config>,
     via: &Handle<KnownHostsHandler>,
     host: &Host,
     lends_agent: bool,
@@ -820,11 +834,11 @@ async fn dial_tunnelled(
     let (handler, link) = known_hosts_handler(host, lends_agent);
     let handle = time::timeout(
         CONNECT_TIMEOUT,
-        client::connect_stream(Arc::clone(config), channel.into_stream(), handler),
+        client::connect_stream(client_config(host), channel.into_stream(), handler),
     )
     .await
     .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
-    .context("SSH connection failed")?;
+    .map_err(|e| link.connect_error(e))?;
     Ok(Dialed {
         handle,
         link,
@@ -842,6 +856,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
         hung_up: Arc::new(AtomicBool::new(false)),
         no_method: Arc::new(AtomicBool::new(false)),
         new_key: Arc::new(Mutex::new(None)),
+        refusal: Arc::new(Mutex::new(None)),
         ended,
     };
     let handler = KnownHostsHandler {
@@ -850,6 +865,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
         hung_up: Arc::clone(&link.hung_up),
         no_method: Arc::clone(&link.no_method),
         new_key: Arc::clone(&link.new_key),
+        refusal: Arc::clone(&link.refusal),
         lends_agent,
         ended: ended_tx,
     };
@@ -1186,8 +1202,10 @@ enum KeyAuth {
 }
 
 /// Tries the agent, the identity file and the default keys, in that order.
-/// `user_started`: a login the user is watching also retries agent keys the
-/// user turned down before.
+/// Agent keys matching the host's identity go first, as ssh(1) orders them; with
+/// `IdentitiesOnly` the agent offers nothing else, and the default keys stay out
+/// next to an identity file. `user_started`: a login the user is watching also
+/// retries agent keys the user turned down before.
 async fn authenticate(
     handle: Handle<KnownHostsHandler>,
     host: &Host,
@@ -1199,32 +1217,50 @@ async fn authenticate(
     // 1. Try SSH agent first — it handles passphrase-protected keys and is the
     //    most common auth method for non-interactive clients.
     #[cfg(unix)]
-    let handle = {
-        let (handle, accepted) = agent_login(handle, &user, user_started).await?;
+    let (handle, turned_down) = {
+        let identities = Identities {
+            keys: host_identities(host).await,
+            only: host.identities_only,
+        };
+        let (handle, accepted, turned_down) =
+            agent_login(handle, &user, user_started, identities).await?;
         if accepted {
             return Ok((handle, KeyAuth::Accepted));
         }
-        handle
+        (handle, turned_down)
     };
     #[cfg(not(unix))]
-    let _ = user_started;
+    let turned_down: Vec<PublicKey> = {
+        let _ = user_started;
+        Vec::new()
+    };
     let mut handle = handle;
 
-    // 2. Try explicit identity_file from host config.
+    // 2. Try explicit identity_file from host config. Here and below a key the
+    //    server already turned down through the agent is not offered again: every
+    //    refusal counts towards its MaxAuthTries.
     if let Some(key_path) = &host.identity_file {
-        match try_key_auth(&mut handle, &user, key_path).await {
-            Ok(true) => return Ok((handle, KeyAuth::Accepted)),
-            Ok(false) => {}
-            Err(e) => note_encrypted(&mut encrypted_key, e, true)?,
+        if !refused_before(key_path, &turned_down).await {
+            match try_key_auth(&mut handle, &user, key_path).await {
+                Ok(true) => return Ok((handle, KeyAuth::Accepted)),
+                Ok(false) => {}
+                Err(e) => note_encrypted(&mut encrypted_key, e, true)?,
+            }
         }
     }
 
     // 3. Try default key files — mirrors what the `ssh` binary does when no
     //    -i flag is given. Skips files that don't exist. A locked one is worth a
     //    prompt only without an identity file: ssh(1) would not offer it then.
+    if host.identities_only && host.identity_file.is_some() {
+        return Ok((handle, KeyAuth::Rejected { encrypted_key }));
+    }
     for key_path in default_key_paths() {
         if key_path.exists() {
             let path_str = key_path.to_string_lossy().into_owned();
+            if refused_before(&path_str, &turned_down).await {
+                continue;
+            }
             match try_key_auth(&mut handle, &user, &path_str).await {
                 Ok(true) => return Ok((handle, KeyAuth::Accepted)),
                 Ok(false) => {}
@@ -1237,6 +1273,66 @@ async fn authenticate(
     }
 
     Ok((handle, KeyAuth::Rejected { encrypted_key }))
+}
+
+/// Whether the key at `path` is one the server turned down through the agent.
+/// Never an RSA key: russh signs one from the agent as rsa-sha2-512 and from a
+/// file as rsa-sha2-256, and a server may take only the latter (older Dropbear).
+async fn refused_before(path: &str, turned_down: &[PublicKey]) -> bool {
+    if turned_down.is_empty() {
+        return false;
+    }
+    let path = path.to_string();
+    tokio::task::spawn_blocking(move || identity::public_key(&path))
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|key| !matches!(key, PublicKey::RSA { .. }) && turned_down.contains(&key))
+}
+
+/// Which agent keys a login offers, and in what order.
+#[cfg(unix)]
+struct Identities {
+    /// The host's own keys, offered first.
+    keys: Vec<PublicKey>,
+    /// `IdentitiesOnly`: offer no other.
+    only: bool,
+}
+
+#[cfg(unix)]
+impl Identities {
+    /// The agent's keys in the order to offer them; the rest keep the agent's.
+    fn order(&self, agent: Vec<PublicKey>) -> Vec<PublicKey> {
+        let (mut offers, others): (Vec<_>, Vec<_>) =
+            agent.into_iter().partition(|key| self.keys.contains(key));
+        if !self.only {
+            offers.extend(others);
+        }
+        offers
+    }
+}
+
+/// The public keys `host` is set up with: its identity file's, or under
+/// `IdentitiesOnly` the default keys', as ssh(1) takes them. File reads, so off
+/// the async workers.
+#[cfg(unix)]
+async fn host_identities(host: &Host) -> Vec<PublicKey> {
+    let paths: Vec<String> = match (&host.identity_file, host.identities_only) {
+        (Some(path), _) => vec![path.clone()],
+        (None, true) => default_key_paths()
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
+        (None, false) => return Vec::new(),
+    };
+    tokio::task::spawn_blocking(move || {
+        paths
+            .iter()
+            .filter_map(|path| identity::public_key(path))
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// A key the server did not answer for in time: the connection is left in an
@@ -1335,19 +1431,29 @@ fn refused_agent_keys() -> MutexGuard<'static, HashSet<String>> {
 /// up mid-signature (a poller restarted, a tunnel stopped) then only detaches:
 /// dropping the connection while russh waits for the signature would leave
 /// russh spinning. The task itself ends within the signing bound.
+///
+/// Also returns the keys the server turned down.
 #[cfg(unix)]
 async fn agent_login(
     handle: Handle<KnownHostsHandler>,
     user: &str,
     user_started: bool,
-) -> anyhow::Result<(Handle<KnownHostsHandler>, bool)> {
+    identities: Identities,
+) -> anyhow::Result<(Handle<KnownHostsHandler>, bool, Vec<PublicKey>)> {
     let user = user.to_string();
     tokio::spawn(async move {
         let mut handle = handle;
-        let accepted = try_agent_auth(&mut handle, &user, user_started)
-            .await
-            .unwrap_or(false);
-        (handle, accepted)
+        let mut turned_down = Vec::new();
+        let accepted = try_agent_auth(
+            &mut handle,
+            &user,
+            user_started,
+            &identities,
+            &mut turned_down,
+        )
+        .await
+        .unwrap_or(false);
+        (handle, accepted, turned_down)
     })
     .await
     .context("SSH agent login failed")
@@ -1358,14 +1464,16 @@ async fn try_agent_auth(
     handle: &mut Handle<KnownHostsHandler>,
     user: &str,
     user_started: bool,
+    identities: &Identities,
+    turned_down: &mut Vec<PublicKey>,
 ) -> anyhow::Result<bool> {
-    let (agent, identities) = time::timeout(AGENT_TIMEOUT, async {
+    let (agent, listed) = time::timeout(AGENT_TIMEOUT, async {
         let mut agent = connect_agent().await?;
-        let identities = agent
+        let listed = agent
             .request_identities()
             .await
             .context("request agent identities")?;
-        Ok::<_, anyhow::Error>((agent, identities))
+        Ok::<_, anyhow::Error>((agent, listed))
     })
     .await
     .map_err(|_| anyhow!("SSH agent did not answer"))??;
@@ -1377,10 +1485,11 @@ async fn try_agent_auth(
         failed: Arc::clone(&failed),
         stalled: Arc::clone(&stalled),
     };
-    for pubkey in identities {
+    for pubkey in identities.order(listed) {
         if !user_started && refused_agent_keys().contains(&pubkey.fingerprint()) {
             continue;
         }
+        let offered = pubkey.clone();
         let attempt = handle.authenticate_future(user, pubkey, signer);
         tokio::pin!(attempt);
         let (back, result) = tokio::select! {
@@ -1407,8 +1516,10 @@ async fn try_agent_auth(
             }
         };
         signer = back;
-        if matches!(result, Ok(true)) {
-            return Ok(true);
+        match result {
+            Ok(true) => return Ok(true),
+            Ok(false) => turned_down.push(offered),
+            Err(_) => {}
         }
     }
     Ok(false)

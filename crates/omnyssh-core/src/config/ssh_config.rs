@@ -1,7 +1,8 @@
 //! Parser for `~/.ssh/config`.
 //!
 //! Supported directives: `Host`, `HostName`, `User`, `Port`,
-//! `IdentityFile`, `ProxyJump`, `LocalForward`, `ForwardAgent`, `Include`.
+//! `IdentityFile`, `IdentitiesOnly`, `ProxyJump`, `LocalForward`, `ForwardAgent`,
+//! `Include`.
 //! Wildcard `Host` and `Match` blocks are skipped, except that a `ForwardAgent no`
 //! there, or in the global section, keeps the agent from every host after it.
 //!
@@ -86,6 +87,8 @@ fn parse_content(
     // ForwardAgent is first-wins, as in ssh(1): a later `yes` in the same block
     // must not turn on what an earlier `no` kept off.
     let mut agent_seen = false;
+    // So is IdentitiesOnly.
+    let mut identities_seen = false;
 
     for raw_line in content.lines() {
         let line = strip_comment(raw_line).trim().to_string();
@@ -105,6 +108,7 @@ fn parse_content(
                 }
                 hosts.append(&mut deferred);
                 agent_seen = false;
+                identities_seen = false;
                 in_wildcard = value.contains('*') || value.contains('?');
                 if !in_wildcard {
                     let h = Host {
@@ -137,6 +141,18 @@ fn parse_content(
             "identityfile" if !in_wildcard => {
                 if let Some(ref mut h) = current {
                     h.identity_file = Some(expand_tilde(value));
+                }
+            }
+            "identitiesonly" if !in_wildcard => {
+                if let Some(ref mut h) = current {
+                    if !identities_seen {
+                        identities_seen = true;
+                        match value.to_ascii_lowercase().as_str() {
+                            "yes" | "true" => h.identities_only = true,
+                            "no" | "false" => {}
+                            _ => tracing::warn!(host = %h.name, value, "IdentitiesOnly skipped"),
+                        }
+                    }
                 }
             }
             "proxyjump" if !in_wildcard => {
@@ -635,6 +651,26 @@ Host db
             "a later yes overrode an earlier no"
         );
         assert!(hosts[1].forward_agent, "the next block starts afresh");
+    }
+
+    #[test]
+    fn test_identities_only_first_value_wins() {
+        let cfg = "\
+Host app01
+    IdentityFile ~/.ssh/app01-admin.pub
+    IdentitiesOnly yes
+    IdentitiesOnly no
+Host db
+    IdentitiesOnly no
+    IdentitiesOnly yes
+Host *
+    IdentitiesOnly yes
+Host web
+    HostName 10.0.0.1
+";
+        let hosts = parse_ssh_config(cfg);
+        let only: Vec<bool> = hosts.iter().map(|h| h.identities_only).collect();
+        assert_eq!(only, [true, false, false]);
     }
 
     #[test]

@@ -102,9 +102,9 @@ pub async fn delete_host(name: String) -> Result<(), CommandError> {
 /// name is an in-place edit that **preserves every field the edit form cannot observe**
 /// — password, identity file, and proxy jump (the outbound `HostDto` omits all three,
 /// §3.4, so the form leaves them blank on edit), plus key-setup metadata, the
-/// SSH-config rename origin, and a monitoring mode the payload left out. Editing
-/// e.g. notes therefore never drops a stored secret or a recorded key setup. A
-/// provided secret still overwrites the old one.
+/// SSH-config rename origin, `IdentitiesOnly`, and a monitoring mode the payload
+/// left out. Editing e.g. notes therefore never drops a stored secret or a recorded
+/// key setup. A provided secret still overwrites the old one.
 fn upsert(hosts: &mut Vec<Host>, input: HostInputDto, imported: Option<Host>) {
     // An omitted monitoring mode means "unchanged", not "back to SSH" — losing it
     // would silently start logging in to a device chosen for reachability only.
@@ -122,6 +122,7 @@ fn upsert(hosts: &mut Vec<Host>, input: HostInputDto, imported: Option<Host>) {
                 .identity_file
                 .or_else(|| existing.identity_file.clone());
             host.proxy_jump = host.proxy_jump.or_else(|| existing.proxy_jump.clone());
+            host.identities_only = existing.identities_only;
             host.key_setup_date = existing.key_setup_date.clone();
             host.password_auth_disabled = existing.password_auth_disabled;
             host.original_ssh_host = existing.original_ssh_host.clone();
@@ -135,6 +136,7 @@ fn upsert(hosts: &mut Vec<Host>, input: HostInputDto, imported: Option<Host>) {
             if let Some(imported) = imported {
                 host.proxy_jump = host.proxy_jump.or(imported.proxy_jump);
                 host.identity_file = host.identity_file.or(imported.identity_file);
+                host.identities_only = imported.identities_only;
                 // Which `~/.ssh/config` entry this copy stands in for. Inert while the
                 // names match — `merge_hosts` already drops the import on the name — but
                 // it is what keeps the import hidden once the copy is renamed in the TUI,
@@ -232,6 +234,7 @@ mod tests {
             password: Some("keep-me".to_string()),
             identity_file: Some("/keys/id".to_string()),
             proxy_jump: Some("bastion".to_string()),
+            identities_only: true,
             key_setup_date: Some("2026-01-01".to_string()),
             password_auth_disabled: Some(true),
             original_ssh_host: Some("web-old".to_string()),
@@ -240,6 +243,7 @@ mod tests {
         }];
         upsert(&mut hosts, input("web"), None);
         let h = &hosts[0];
+        assert!(h.identities_only);
         assert_eq!(h.password.as_deref(), Some("keep-me"));
         assert_eq!(h.identity_file.as_deref(), Some("/keys/id"));
         assert_eq!(h.proxy_jump.as_deref(), Some("bastion"));
@@ -258,6 +262,7 @@ mod tests {
             hostname: "10.0.0.9".to_string(),
             proxy_jump: Some("public-proxy".to_string()),
             identity_file: Some("/keys/id_ed25519".to_string()),
+            identities_only: true,
             source: HostSource::SshConfig,
             ..Host::default()
         };
@@ -268,6 +273,10 @@ mod tests {
 
         assert_eq!(hosts.len(), 1);
         let h = &hosts[0];
+        assert!(
+            h.identities_only,
+            "the copy would offer every agent key again"
+        );
         assert_eq!(
             h.source,
             HostSource::Manual,

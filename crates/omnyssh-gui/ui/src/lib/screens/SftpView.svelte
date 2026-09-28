@@ -9,10 +9,11 @@
   import { homeDir } from '@tauri-apps/api/path';
   import { Icon } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
+  import Select from '$lib/components/Select.svelte';
   import SftpPane from './SftpPane.svelte';
   import type { FileEntryDto } from '$lib/bindings';
   import { sessions, type Session } from '$lib/stores/sessions';
-  import { sftp, markedEntries, formatBytes, type PaneSide } from '$lib/stores/sftp';
+  import { sftp, markedEntries, formatBytes, rootOf, type PaneSide } from '$lib/stores/sftp';
   import { lastError } from '$lib/stores/notifications';
   import {
     sftpOpen,
@@ -25,6 +26,7 @@
     sftpDelete,
     sftpPreview,
     listLocalDir,
+    listLocalRoots,
     previewLocalFile
   } from '$lib/ipc/commands';
 
@@ -47,6 +49,22 @@
   );
 
   const view = $derived(backendId != null ? $sftp.get(backendId) : undefined);
+
+  // Drive letters on Windows, where `..` stops at the drive the pane is on. A single
+  // root elsewhere, and then there is nothing to switch.
+  let roots = $state<string[]>([]);
+  const drive = $derived(view ? rootOf(view.local.path, roots) : '');
+  // What the selector shows: the drive the pane is on, back again after a drive that
+  // failed to list (an empty card reader), so picking that one again still fires.
+  let selectedDrive = $state('');
+  $effect(() => {
+    selectedDrive = drive;
+  });
+
+  async function switchDrive(root: string): Promise<void> {
+    await refreshLocal(root);
+    selectedDrive = drive;
+  }
   const transfer = $derived(view?.transfer);
 
   const localMarkedFiles = $derived(view ? markedEntries(view.local).filter((e) => !e.isDir) : []);
@@ -67,15 +85,28 @@
     return dir.endsWith(sep) ? `${dir}${name}` : `${dir}${sep}${name}`;
   }
 
+  // Only the latest local listing lands: a network drive left for another can take
+  // a long time to fail, and must not then replace the pane the user is on.
+  let localSeq = 0;
+
   async function refreshLocal(path: string): Promise<void> {
     const id = backendId;
     if (id == null) return;
+    const seq = ++localSeq;
     sftp.beginLoading(id, 'local');
     try {
       const entries = await listLocalDir(path);
-      sftp.listing(id, 'local', path, entries);
+      if (seq === localSeq) sftp.listing(id, 'local', path, entries);
     } catch (err) {
-      sftp.paneError(id, 'local', errMsg(err));
+      if (seq === localSeq) sftp.paneError(id, 'local', errMsg(err));
+    }
+  }
+
+  async function loadRoots(): Promise<void> {
+    try {
+      roots = await listLocalRoots();
+    } catch {
+      roots = [];
     }
   }
 
@@ -109,6 +140,7 @@
       }
       backendId = id;
       sftp.open(id, session.hostName);
+      void loadRoots();
       void refreshLocal(home);
       refreshRemote('/');
     })();
@@ -272,6 +304,10 @@
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus ' +
     'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent ' +
     'disabled:hover:text-muted disabled:hover:border-default';
+  const driveSelect =
+    'rounded-full border border-default bg-surface py-1 pl-2.5 text-xs font-medium text-muted ' +
+    'transition hover:border-strong hover:text-fg ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
   const field =
     'w-full rounded-lg bg-surface-inset px-3 py-2 text-sm text-fg outline-none ' +
     'focus-visible:ring-2 focus-visible:ring-focus placeholder:text-faint';
@@ -299,6 +335,22 @@
         onPreview={(e) => preview('local', e)}
       >
         {#snippet toolbar()}
+          {#if roots.length > 1}
+            <Select
+              bind:value={selectedDrive}
+              class={driveSelect}
+              aria-label="Local drive"
+              title="Switch drive"
+              onchange={(e) => switchDrive(e.currentTarget.value)}
+            >
+              {#if !drive}
+                <option value="" disabled>Drive</option>
+              {/if}
+              {#each roots as root (root)}
+                <option value={root}>{root.replace(/[\\/]$/, '')}</option>
+              {/each}
+            </Select>
+          {/if}
           <button
             type="button"
             class={toolBtn}
@@ -314,7 +366,11 @@
             class={toolBtn}
             title="Refresh"
             aria-label="Refresh local"
-            onclick={() => refreshLocal(view.local.path)}
+            onclick={() => {
+              // A drive plugged in since shows up too.
+              void loadRoots();
+              void refreshLocal(view.local.path);
+            }}
           >
             <Icon name="refresh" size={13} />
           </button>

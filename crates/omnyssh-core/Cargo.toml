@@ -16,6 +16,9 @@ tokio = { workspace = true, features = ["net"] }
 russh = "0.46"
 russh-sftp = "2.0"
 russh-keys = "0.46"
+# The public half of an encrypted OpenSSH key, to match it with an agent key.
+# Already built for russh-keys.
+ssh-key = "0.6"
 
 # Serialization
 serde = { workspace = true }
@@ -50,6 +53,10 @@ sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
 self-replace = "1"
+
+# The drive letters the local file panes can switch to. Already built for tokio.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

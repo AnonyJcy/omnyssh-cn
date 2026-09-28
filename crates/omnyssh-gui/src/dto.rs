@@ -412,6 +412,8 @@ impl From<HostInputDto> for Host {
             user: dto.user,
             port: dto.port,
             identity_file: non_empty(dto.identity_file),
+            // Read from `~/.ssh/config` only; `save_host` carries it over.
+            identities_only: false,
             password: non_empty(dto.password),
             proxy_jump: non_empty(dto.proxy_jump),
             tags: dto.tags,

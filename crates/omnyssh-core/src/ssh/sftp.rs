@@ -483,6 +483,31 @@ pub async fn list_local_dir(path: &str) -> anyhow::Result<Vec<FileEntry>> {
     Ok(entries)
 }
 
+/// The roots the local file system can be browsed from: every drive letter on
+/// Windows, where `..` stops at the drive the pane is on, and `/` elsewhere.
+pub fn local_roots() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        // SAFETY: GetLogicalDrives takes no arguments and only returns a bitmask.
+        let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+        drive_roots(mask)
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["/".to_string()]
+    }
+}
+
+/// `C:\`-style roots for the drives set in `mask` (bit 0 is `A:`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drive_roots(mask: u32) -> Vec<String> {
+    (b'A'..=b'Z')
+        .enumerate()
+        .filter(|(bit, _)| mask & (1 << bit) != 0)
+        .map(|(_, letter)| format!("{}:\\", letter as char))
+        .collect()
+}
+
 /// Reads up to 4 096 bytes from a local file and returns them as a UTF-8 string.
 ///
 /// Non-UTF-8 bytes are replaced with the Unicode replacement character.
@@ -500,4 +525,23 @@ pub async fn preview_local_file(path: &str) -> anyhow::Result<String> {
         .context("read local preview bytes")?;
     buf.truncate(n);
     Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drive_roots_follow_the_mask() {
+        assert_eq!(drive_roots(0b1100), ["C:\\", "D:\\"]);
+        assert_eq!(drive_roots(1 | 1 << 25), ["A:\\", "Z:\\"]);
+        assert!(drive_roots(0).is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_system_drive_is_a_root() {
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        assert!(local_roots().contains(&format!("{}\\", system.to_uppercase())));
+    }
 }

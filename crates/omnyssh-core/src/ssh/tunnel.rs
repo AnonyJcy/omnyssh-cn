@@ -312,6 +312,7 @@ fn changed(before: &Host, after: &Host) -> bool {
         || before.port != after.port
         || before.user != after.user
         || before.identity_file != after.identity_file
+        || before.identities_only != after.identities_only
         || before.password != after.password
         || before.proxy_jump != after.proxy_jump
         || before.local_forwards != after.local_forwards
@@ -743,6 +744,10 @@ mod tests {
         let mut readdressed = before.clone();
         readdressed.hostname = String::from("10.0.0.6");
         assert!(changed(&before, &readdressed));
+
+        let mut narrowed = before.clone();
+        narrowed.identities_only = true;
+        assert!(changed(&before, &narrowed));
     }
 
     #[tokio::test]

@@ -288,6 +288,13 @@ async listLocalDir(path: string) : Promise<Result<FileEntryDto[], CommandError>>
 }
 },
 /**
+ * The roots the local pane can switch to: every drive letter on Windows, `/`
+ * elsewhere (tech-gui.md §4.2).
+ */
+async listLocalRoots() : Promise<string[]> {
+    return await TAURI_INVOKE("list_local_roots");
+},
+/**
  * Read up to 4 KiB of a local file as UTF-8 for preview (tech-gui.md §4.2).
  */
 async previewLocalFile(path: string) : Promise<Result<string, CommandError>> {
