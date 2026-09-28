@@ -33,6 +33,7 @@ use tokio::time;
 
 use crate::ssh::client::Host;
 use crate::ssh::identity::{self, IdentityError};
+use crate::ssh::known_hosts::{self, Verdict};
 use crate::ssh::password::{self, AskPassword, Method, NoAnswer, Prompt};
 
 // ---------------------------------------------------------------------------
@@ -42,9 +43,9 @@ use crate::ssh::password::{self, AskPassword, Method, NoAnswer, Prompt};
 /// Shared russh client handler used by every native SSH path (metrics, SFTP,
 /// terminal).
 ///
-/// Verifies the server's host key against `~/.ssh/known_hosts`.
-/// Unknown hosts are recorded on first connection (trust on first use);
-/// changed keys are rejected.
+/// Verifies the server's host key against `~/.ssh/known_hosts` (see
+/// [`known_hosts`]). Unknown hosts are recorded on first connection (trust on
+/// first use); changed keys are rejected.
 pub(crate) struct KnownHostsHandler {
     /// Hostname used for known_hosts lookup.
     host: String,
@@ -58,6 +59,9 @@ pub(crate) struct KnownHostsHandler {
     no_method: Arc<AtomicBool>,
     /// The fingerprint of a host key first seen, and recorded, on this connection.
     new_key: Arc<Mutex<Option<String>>>,
+    /// Why the host key was turned down, for the user; russh itself only says
+    /// "Unknown server key".
+    refusal: Arc<Mutex<Option<String>>>,
     /// Whether this connection lends the local agent (`ssh -A`). Only a
     /// terminal's target does; any other gets its agent channels closed.
     lends_agent: bool,
@@ -73,6 +77,7 @@ struct Link {
     hung_up: Arc<AtomicBool>,
     no_method: Arc<AtomicBool>,
     new_key: Arc<Mutex<Option<String>>>,
+    refusal: Arc<Mutex<Option<String>>>,
     /// Changes (to closed) once the session is over.
     ended: watch::Receiver<()>,
 }
@@ -84,6 +89,19 @@ impl Link {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+
+    /// The error for a handshake that failed: a turned-down host key says why.
+    fn connect_error(&self, e: russh::Error) -> anyhow::Error {
+        let refusal = self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        match (e, refusal) {
+            (russh::Error::UnknownKey, Some(why)) => Refused(why).into(),
+            (e, _) => anyhow::Error::new(e).context("SSH connection failed"),
+        }
+    }
 }
 
 #[async_trait]
@@ -94,24 +112,20 @@ impl client::Handler for KnownHostsHandler {
         &mut self,
         server_public_key: &russh::keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
-            // Key is in known_hosts and matches.
-            Ok(true) => Ok(true),
+        let fingerprint = format!("SHA256:{}", server_public_key.fingerprint());
+        let refusal = match known_hosts::check(&self.host, self.port, server_public_key) {
+            Verdict::Known => return Ok(true),
             // Host not seen before — record the key (trust on first use) so a
             // later key change is detected, then accept. Recording is
             // best-effort: a connection must not fail just because
             // known_hosts is unwritable.
-            Ok(false) => {
+            Verdict::Unknown => {
                 tracing::warn!(
                     host = %self.host,
                     port = self.port,
                     "Accepting unknown host key for {} (Trust On First Use)", self.host
                 );
-                match russh::keys::known_hosts::learn_known_hosts(
-                    &self.host,
-                    self.port,
-                    server_public_key,
-                ) {
+                match known_hosts::learn(&self.host, self.port, server_public_key) {
                     Ok(()) => tracing::info!(
                         host = %self.host,
                         port = self.port,
@@ -126,30 +140,34 @@ impl client::Handler for KnownHostsHandler {
                 *self
                     .new_key
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some(format!("SHA256:{}", server_public_key.fingerprint()));
-                Ok(true)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
+                return Ok(true);
             }
             // A previously recorded key changed — refuse; possible MITM.
-            Err(russh::keys::Error::KeyChanged { .. }) => {
+            Verdict::Changed(file) => {
                 tracing::warn!(
                     host = %self.host,
                     port = self.port,
                     "server key mismatch in known_hosts — possible MITM attack, refusing connection"
                 );
-                Ok(false)
+                known_hosts::changed_message(&self.host, self.port, &file, &fingerprint)
             }
             // Unreadable or corrupt known_hosts — fail closed rather than
             // accept an unverified key.
-            Err(e) => {
+            Verdict::Unreadable(file, e) => {
                 tracing::warn!(
                     host = %self.host,
                     error = %e,
                     "known_hosts check failed; refusing connection"
                 );
-                Ok(false)
+                known_hosts::unreadable_message(&self.host, self.port, &file, &e)
             }
-        }
+        };
+        *self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
+        Ok(false)
     }
 
     async fn disconnected(
@@ -622,7 +640,6 @@ async fn connect_chain(
     lends_agent: bool,
 ) -> anyhow::Result<SshConnection> {
     let chain = jump_chain(host).await?;
-    let config = client_config();
 
     // Walk the bastions outward: the first is reached directly, every later one
     // through its predecessor. The target then rides the last hop.
@@ -630,8 +647,8 @@ async fn connect_chain(
     for (i, hop) in chain.iter().enumerate() {
         let key = login_key(hop, &chain[..i]);
         let handle = match jumps.last() {
-            None => connect_direct(&config, hop, &key, &mut passwords, false).await,
-            Some(via) => connect_tunnelled(&config, via, hop, &key, &mut passwords, false).await,
+            None => connect_direct(hop, &key, &mut passwords, false).await,
+            Some(via) => connect_tunnelled(via, hop, &key, &mut passwords, false).await,
         }
         .map_err(|e| at_hop(e, format!("ProxyJump via '{}' failed", hop.name)))?;
         jumps.push(handle);
@@ -639,12 +656,10 @@ async fn connect_chain(
 
     let key = login_key(host, &chain);
     let handle = match (jumps.last(), chain.last()) {
-        (Some(via), Some(last)) => {
-            connect_tunnelled(&config, via, host, &key, &mut passwords, lends_agent)
-                .await
-                .map_err(|e| at_hop(e, format!("connecting via '{}' failed", last.name)))?
-        }
-        _ => connect_direct(&config, host, &key, &mut passwords, lends_agent).await?,
+        (Some(via), Some(last)) => connect_tunnelled(via, host, &key, &mut passwords, lends_agent)
+            .await
+            .map_err(|e| at_hop(e, format!("connecting via '{}' failed", last.name)))?,
+        _ => connect_direct(host, &key, &mut passwords, lends_agent).await?,
     };
 
     Ok(SshConnection {
@@ -669,9 +684,14 @@ pub(crate) async fn connect_budget(host: &Host) -> Duration {
     (CONNECT_TIMEOUT + AGENT_BUDGET) * (hops as u32 + 1)
 }
 
-/// The shared russh client configuration (timeouts + keepalives).
-fn client_config() -> Arc<client::Config> {
+/// The russh client configuration for one hop: timeouts, keepalives, and the
+/// host key types already saved for it first.
+fn client_config(host: &Host) -> Arc<client::Config> {
     Arc::new(client::Config {
+        preferred: russh::Preferred {
+            key: known_hosts::preferred(&host.hostname, host.port),
+            ..russh::Preferred::DEFAULT
+        },
         // No inactivity timeout: russh skips resetting it on the iteration that
         // sends a keepalive, so a peer that never answers `keepalive@openssh.com`
         // (common in appliance SSH stacks) was torn down after 30 s even while
@@ -716,13 +736,12 @@ async fn jump_chain(host: &Host) -> anyhow::Result<Vec<Host>> {
 
 /// Opens a TCP connection to `host` and authenticates.
 async fn connect_direct(
-    config: &Arc<client::Config>,
     host: &Host,
     key: &str,
     passwords: &mut Passwords<'_>,
     lends_agent: bool,
 ) -> anyhow::Result<Handle<KnownHostsHandler>> {
-    let dial = || dial_direct(config, host, lends_agent);
+    let dial = || dial_direct(host, lends_agent);
     finish_auth(dial().await?, host, key, dial, passwords).await
 }
 
@@ -730,14 +749,13 @@ async fn connect_direct(
 /// channel on the bastion carries a second SSH session to the target, which is
 /// verified and authenticated in its own right.
 async fn connect_tunnelled(
-    config: &Arc<client::Config>,
     via: &Handle<KnownHostsHandler>,
     host: &Host,
     key: &str,
     passwords: &mut Passwords<'_>,
     lends_agent: bool,
 ) -> anyhow::Result<Handle<KnownHostsHandler>> {
-    let dial = || dial_tunnelled(config, via, host, lends_agent);
+    let dial = || dial_tunnelled(via, host, lends_agent);
     finish_auth(dial().await?, host, key, dial, passwords).await
 }
 
@@ -773,20 +791,16 @@ impl Dialed {
 }
 
 /// Opens a TCP connection to `host` and verifies its host key.
-async fn dial_direct(
-    config: &Arc<client::Config>,
-    host: &Host,
-    lends_agent: bool,
-) -> anyhow::Result<Dialed> {
+async fn dial_direct(host: &Host, lends_agent: bool) -> anyhow::Result<Dialed> {
     let addr = format!("{}:{}", host.hostname, host.port);
     let (handler, link) = known_hosts_handler(host, lends_agent);
     let handle = time::timeout(
         CONNECT_TIMEOUT,
-        client::connect(Arc::clone(config), addr, handler),
+        client::connect(client_config(host), addr, handler),
     )
     .await
     .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
-    .context("SSH connection failed")?;
+    .map_err(|e| link.connect_error(e))?;
     Ok(Dialed {
         handle,
         link,
@@ -798,7 +812,6 @@ async fn dial_direct(
 /// Opens a `direct-tcpip` channel to `host` on the bastion `via` and runs the
 /// SSH handshake over it.
 async fn dial_tunnelled(
-    config: &Arc<client::Config>,
     via: &Handle<KnownHostsHandler>,
     host: &Host,
     lends_agent: bool,
@@ -820,11 +833,11 @@ async fn dial_tunnelled(
     let (handler, link) = known_hosts_handler(host, lends_agent);
     let handle = time::timeout(
         CONNECT_TIMEOUT,
-        client::connect_stream(Arc::clone(config), channel.into_stream(), handler),
+        client::connect_stream(client_config(host), channel.into_stream(), handler),
     )
     .await
     .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
-    .context("SSH connection failed")?;
+    .map_err(|e| link.connect_error(e))?;
     Ok(Dialed {
         handle,
         link,
@@ -842,6 +855,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
         hung_up: Arc::new(AtomicBool::new(false)),
         no_method: Arc::new(AtomicBool::new(false)),
         new_key: Arc::new(Mutex::new(None)),
+        refusal: Arc::new(Mutex::new(None)),
         ended,
     };
     let handler = KnownHostsHandler {
@@ -850,6 +864,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
         hung_up: Arc::clone(&link.hung_up),
         no_method: Arc::clone(&link.no_method),
         new_key: Arc::clone(&link.new_key),
+        refusal: Arc::clone(&link.refusal),
         lends_agent,
         ended: ended_tx,
     };

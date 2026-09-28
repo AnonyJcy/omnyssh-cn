@@ -596,8 +596,17 @@ async fn a_changed_host_key_fails_without_a_retry() {
     let impostor = KeyPair::generate_ed25519()
         .clone_public_key()
         .expect("public key");
-    russh::keys::known_hosts::learn_known_hosts("127.0.0.1", server.port(), &impostor)
-        .expect("record the old key");
+    let known_hosts = std::env::home_dir()
+        .expect("home")
+        .join(".ssh")
+        .join("known_hosts");
+    russh::keys::known_hosts::learn_known_hosts_path(
+        "127.0.0.1",
+        server.port(),
+        &impostor,
+        &known_hosts,
+    )
+    .expect("record the old key");
 
     let (mut tunnels, mut statuses) = Statuses::manager();
     tunnels.start(host(
@@ -611,7 +620,10 @@ async fn a_changed_host_key_fails_without_a_retry() {
         .until("moved", |s| !matches!(s, TunnelStatus::Connecting))
         .await
     {
-        TunnelStatus::Failed(reason) => assert!(reason.contains("Unknown server key"), "{reason}"),
+        TunnelStatus::Failed(reason) => assert!(
+            reason.contains("has changed") && reason.contains(&*known_hosts.to_string_lossy()),
+            "{reason}"
+        ),
         other => panic!("expected Failed, got {other:?}"),
     }
 }

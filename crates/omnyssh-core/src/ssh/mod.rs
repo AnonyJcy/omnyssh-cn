@@ -8,6 +8,7 @@ pub mod discovery;
 pub mod identity;
 pub mod jump;
 pub mod key_setup;
+mod known_hosts;
 pub mod metrics;
 pub mod password;
 pub mod pool;
