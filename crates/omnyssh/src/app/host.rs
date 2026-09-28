@@ -281,6 +281,7 @@ impl HostForm {
             user,
             port,
             identity_file,
+            identities_only: false,
             password,
             proxy_jump: None,
             tags,
@@ -573,6 +574,9 @@ impl App {
                         // an imported host would otherwise drop its bastion and
                         // the saved copy would try to connect direct.
                         host.proxy_jump = old_host.and_then(|h| h.proxy_jump.clone());
+                        // Nor has IdentitiesOnly, and losing it brings back a login
+                        // that offers every agent key.
+                        host.identities_only = old_host.is_some_and(|h| h.identities_only);
 
                         // An import is adopted under the name it was imported by; a copy
                         // already adopted keeps the one it carries. Dropping it brings the

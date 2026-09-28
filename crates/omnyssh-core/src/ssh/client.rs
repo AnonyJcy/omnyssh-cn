@@ -59,6 +59,11 @@ pub struct Host {
     /// Path to the private key file (e.g. `~/.ssh/id_ed25519`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<String>,
+    /// Offer only the identity file's key (the default keys without one), even
+    /// from the agent: `IdentitiesOnly yes`. An agent holding many keys would
+    /// otherwise use up the server's `MaxAuthTries` first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub identities_only: bool,
     /// Password for password-based authentication (not recommended, used for initial setup).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
@@ -141,6 +146,7 @@ impl Default for Host {
             user: default_user(),
             port: default_port(),
             identity_file: None,
+            identities_only: false,
             password: None,
             proxy_jump: None,
             tags: Vec::new(),

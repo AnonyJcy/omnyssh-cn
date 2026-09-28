@@ -5,9 +5,10 @@
 //! shares a key unlocks it once per session.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-use russh::keys::key::KeyPair;
+use russh::keys::key::{KeyPair, PublicKey};
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
 
@@ -174,6 +175,28 @@ pub fn unlock(path: &str, passphrase: &str) -> Result<(), IdentityError> {
         // passphrase (russh reports it as a cipher or parse error).
         Err(_) => Err(IdentityError::WrongPassphrase),
     }
+}
+
+/// The public half of the key at `path`, found as ssh(1) finds it and never
+/// decrypted: the file itself when it is a public key (an `IdentityFile` may name
+/// the `.pub` of a key that only an agent holds), else `<path>.pub`, else the
+/// copy an OpenSSH private key carries in the clear, else an unencrypted PEM key's.
+pub(crate) fn public_key(path: &str) -> Option<PublicKey> {
+    let path = expand_tilde(path);
+    russh::keys::load_public_key(&path)
+        .or_else(|_| russh::keys::load_public_key(format!("{path}.pub")))
+        .ok()
+        .or_else(|| {
+            let key = ssh_key::PrivateKey::read_openssh_file(Path::new(&path)).ok()?;
+            let blob = key.public_key().to_bytes().ok()?;
+            russh::keys::key::parse_public_key(&blob, None).ok()
+        })
+        .or_else(|| {
+            russh::keys::load_secret_key(&path, None)
+                .ok()?
+                .clone_public_key()
+                .ok()
+        })
 }
 
 /// Load a private key, using a cached passphrase when the file is encrypted.

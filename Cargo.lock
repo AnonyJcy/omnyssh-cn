@@ -3207,6 +3207,7 @@ dependencies = [
  "semver",
  "serde",
  "sha2",
+ "ssh-key",
  "tar",
  "tempfile",
  "thiserror 2.0.18",

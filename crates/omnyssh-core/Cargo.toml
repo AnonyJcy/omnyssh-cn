@@ -16,6 +16,9 @@ tokio = { workspace = true, features = ["net"] }
 russh = "0.46"
 russh-sftp = "2.0"
 russh-keys = "0.46"
+# The public half of an encrypted OpenSSH key, to match it with an agent key.
+# Already built for russh-keys.
+ssh-key = "0.6"
 
 # Serialization
 serde = { workspace = true }

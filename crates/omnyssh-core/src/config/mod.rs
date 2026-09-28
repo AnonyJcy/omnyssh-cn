@@ -133,7 +133,9 @@ pub fn load_all_hosts() -> anyhow::Result<Vec<Host>> {
 ///
 /// Manual entries come first and take priority: an SSH-config host is dropped
 /// when a manual host already uses its name, or when a manual host records it
-/// as a renamed original (via `original_ssh_host`).
+/// as a renamed original (via `original_ssh_host`). Such a copy still takes
+/// `IdentitiesOnly` from the entry it stands in for: neither editor has a field
+/// for it, so a snapshot would be frozen for good.
 pub(crate) fn merge_hosts(manual: Vec<Host>, ssh_hosts: Vec<Host>) -> Vec<Host> {
     let manual_names: std::collections::HashSet<String> =
         manual.iter().map(|h| h.name.clone()).collect();
@@ -145,6 +147,12 @@ pub(crate) fn merge_hosts(manual: Vec<Host>, ssh_hosts: Vec<Host>) -> Vec<Host> 
         .collect();
 
     let mut all = manual;
+    for copy in &mut all {
+        let source = copy.original_ssh_host.as_deref().unwrap_or(&copy.name);
+        if let Some(import) = ssh_hosts.iter().find(|h| h.name == source) {
+            copy.identities_only = import.identities_only;
+        }
+    }
     for h in ssh_hosts {
         if !manual_names.contains(&h.name) && !renamed_ssh_hosts.contains(&h.name) {
             all.push(h);
@@ -237,6 +245,23 @@ mod tests {
             ],
         );
         assert_eq!(names(&out), ["a"]);
+    }
+
+    #[test]
+    fn a_copy_follows_identities_only_in_the_ssh_config() {
+        let mut only = host("app01", HostSource::SshConfig);
+        only.identities_only = true;
+        let mut pinned = renamed("renamed", "db");
+        pinned.identities_only = true;
+        let out = merge_hosts(
+            vec![host("app01", HostSource::Manual), pinned],
+            vec![only, host("db", HostSource::SshConfig)],
+        );
+        assert!(out[0].identities_only, "the line added to ~/.ssh/config");
+        assert!(
+            !out[1].identities_only,
+            "the line removed from ~/.ssh/config"
+        );
     }
 
     #[test]
