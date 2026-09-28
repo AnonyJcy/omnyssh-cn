@@ -360,9 +360,10 @@
             {/if}
           {/if}
 
-          <!-- Why it is down. It can name hosts and addresses, so streamer mode keeps it off screen. -->
+          <!-- Why it is down. It can name hosts and addresses, so streamer mode keeps it off screen.
+               Selectable: a refused host key comes with a command to copy. -->
           {#if card.failure}
-            <p class="break-words text-xs text-status-crit">
+            <p class="select-text break-words text-xs text-status-crit">
               {$streamerMode ? 'Details hidden in streamer mode' : card.failure}
             </p>
           {/if}
