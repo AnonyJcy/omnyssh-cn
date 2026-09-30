@@ -23,6 +23,11 @@ pub enum AppEvent {
     TermScroll(i16),
     /// A domain event produced by the SSH engine or a background task.
     Core(CoreEvent),
+    /// A key unlock finished (the key path, and the error to show if it failed).
+    PassphraseUnlocked {
+        key_path: String,
+        result: Result<(), String>,
+    },
 }
 
 /// Whether a key event should be forwarded to the app.

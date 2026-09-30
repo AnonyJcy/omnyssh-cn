@@ -2,9 +2,10 @@
 //! directory navigation and SFTP transfers.
 
 use std::collections::HashSet;
-use std::time::Duration;
 
 use super::*;
+use omnyssh_core::ssh::identity;
+use omnyssh_core::ssh::password::Prompter;
 use omnyssh_core::ssh::sftp::{self, FileEntry, SftpCommand, SftpManager};
 
 // ---------------------------------------------------------------------------
@@ -319,41 +320,32 @@ impl App {
         self.view.file_manager.connected_host = None;
         self.view.file_manager.remote = FilePanelView::default();
 
-        self.view.status_message = Some(format!("Connecting to '{}'… (30s timeout)", host.name));
+        self.view.status_message = Some(format!("Connecting to '{}'…", host.name));
         self.view.file_manager.sftp_connecting = true;
 
-        // Spawn connection in background with 30s timeout to prevent UI freeze
+        // In the background: the login may wait on a password prompt. Every
+        // step of the connect has a bound of its own.
         let tx = self.core_tx.clone();
         let host_clone = host.clone();
         tokio::spawn(async move {
-            let connect_future = SftpManager::connect(&host_clone, tx.clone());
-            let timeout_future = tokio::time::sleep(Duration::from_secs(30));
-
-            tokio::select! {
-                result = connect_future => {
-                    match result {
-                        Ok(mgr) => {
-                            // Send the manager through a new event type
-                            let _ = tx
-                                .send(CoreEvent::SftpManagerReady {
-                                    host_name: host_clone.name.clone(),
-                                    manager: Box::new(mgr),
-                                })
-                                .await;
-                        }
-                        Err(e) => {
-                            let _ = tx
-                                .send(CoreEvent::SftpDisconnected {
-                                    reason: e.to_string(),
-                                })
-                                .await;
-                        }
-                    }
+            let prompter = Prompter::new(tx.clone(), &host_clone.name);
+            match SftpManager::connect(&host_clone, tx.clone(), prompter).await {
+                Ok(mgr) => {
+                    // Send the manager through a new event type
+                    let _ = tx
+                        .send(CoreEvent::SftpManagerReady {
+                            host_name: host_clone.name.clone(),
+                            manager: Box::new(mgr),
+                        })
+                        .await;
                 }
-                _ = timeout_future => {
+                Err(e) => {
+                    if let Some(path) = omnyssh_core::ssh::session::passphrase_required(&e) {
+                        identity::ask_passphrase(&tx, &host_clone.name, path).await;
+                    }
                     let _ = tx
                         .send(CoreEvent::SftpDisconnected {
-                            reason: "connection timed out (30s)".to_string(),
+                            reason: format!("{e:#}"),
                         })
                         .await;
                 }
@@ -438,6 +430,34 @@ impl App {
                 }
             });
         }
+    }
+
+    /// Moves the local panel to the next drive: on Windows `..` stops at the root
+    /// of the drive it is on. A drive that does not list (an empty card reader)
+    /// is passed over, so it cannot hide the ones after it.
+    pub(crate) async fn fm_next_drive(&mut self) {
+        let next = roots_after(&sftp::local_roots(), &self.view.file_manager.local.cwd);
+        if next.is_empty() {
+            self.view.status_message = Some("No other drives".to_string());
+            return;
+        }
+        self.view.file_manager.active_panel = FmPanel::Local;
+        let tx = self.core_tx.clone();
+        tokio::spawn(async move {
+            let mut failure = None;
+            for path in next {
+                match sftp::list_local_dir(&path).await {
+                    Ok(entries) => {
+                        let _ = tx.send(CoreEvent::LocalDirListed { path, entries }).await;
+                        return;
+                    }
+                    Err(e) => failure = Some(format!("{e:#}")),
+                }
+            }
+            if let Some(failure) = failure {
+                let _ = tx.send(CoreEvent::Error(failure)).await;
+            }
+        });
     }
 
     /// Pastes all clipboard contents into the active panel (upload / download).
@@ -636,9 +656,37 @@ fn filename_of(path: &str) -> String {
         .to_string()
 }
 
+/// The other roots in the order `d` visits them: those after the one `cwd` is
+/// on, then round to those before it; all of them when it is on none.
+fn roots_after(roots: &[String], cwd: &str) -> Vec<String> {
+    let cwd = cwd.to_lowercase();
+    match roots
+        .iter()
+        .position(|root| cwd.starts_with(&root.to_lowercase()))
+    {
+        Some(at) => roots[at + 1..]
+            .iter()
+            .chain(&roots[..at])
+            .cloned()
+            .collect(),
+        None if roots.len() > 1 => roots.to_vec(),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_drive_wraps_and_ignores_case() {
+        let roots: Vec<String> = ["C:\\", "D:\\", "E:\\"].map(String::from).to_vec();
+        assert_eq!(roots_after(&roots, "d:\\Media"), ["E:\\", "C:\\"]);
+        assert_eq!(roots_after(&roots, "E:\\"), ["C:\\", "D:\\"]);
+        // A network share is on no drive: every drive is next.
+        assert_eq!(roots_after(&roots, "\\\\nas\\share"), roots);
+        assert!(roots_after(&["/".to_string()], "/home").is_empty());
+    }
 
     fn entry(name: &str, path: &str) -> FileEntry {
         FileEntry {

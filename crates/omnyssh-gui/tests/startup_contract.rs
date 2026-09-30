@@ -96,6 +96,29 @@ fn the_render_retry_marks_the_child_it_starts() {
     );
 }
 
+/// A second launch has to exit before anything else starts, and only the first plugin
+/// runs before all the others. Moved down the list, the second copy would open the
+/// settings store and the updater — and, with the tray, a second icon — before quitting.
+#[test]
+fn the_single_instance_plugin_is_registered_first() {
+    let first = MAIN_RS.find(".plugin(").expect("main.rs registers plugins");
+    assert!(
+        MAIN_RS[first..].starts_with(".plugin(tauri_plugin_single_instance::init("),
+        "tauri_plugin_single_instance is no longer the first plugin registered"
+    );
+}
+
+/// The window hides into the tray only; `prevent_exit` would also swallow the tray's
+/// own Quit, leaving an app with no window that cannot be closed.
+#[test]
+fn nothing_prevents_the_app_from_exiting() {
+    let tray = read(Path::new(MANIFEST_DIR).join("src/tray.rs"));
+    assert!(
+        !MAIN_RS.contains("prevent_exit(") && !tray.contains("prevent_exit("),
+        "prevent_exit would block the tray's Quit"
+    );
+}
+
 /// Window geometry is restored by a plugin whose default flag set includes `VISIBLE`,
 /// which it applies from `on_window_ready` — before the page exists. Fall back to those
 /// defaults and every launch shows the window over a blank webview again, undoing the

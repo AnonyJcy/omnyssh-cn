@@ -11,6 +11,7 @@ use crate::config::snippets::Snippet;
 use crate::ssh::client::{ConnectionStatus, Host};
 use crate::ssh::key_setup::KeySetupStep;
 use crate::ssh::sftp::FileEntry;
+use crate::ssh::tunnel::TunnelStatus;
 
 /// Placeholder type aliases for future stages.
 /// `HostId` is the host's `name` field — stable, human-readable key.
@@ -132,6 +133,12 @@ pub enum CoreEvent {
     DiscoveryFailed(HostId, String),
 
     // -----------------------------------------------------------------------
+    // Port forwarding
+    // -----------------------------------------------------------------------
+    /// A host's tunnel changed state.
+    TunnelStatusChanged(HostId, TunnelStatus),
+
+    // -----------------------------------------------------------------------
     // Auto SSH Key Setup events
     // -----------------------------------------------------------------------
     /// Progress update from key setup (host_id, current step, total steps).
@@ -142,6 +149,21 @@ pub enum CoreEvent {
     KeySetupFailed(HostId, String),
     /// Emergency rollback was triggered (host_id, rollback_result).
     KeySetupRollback(HostId, String),
+
+    /// A private key is encrypted and no passphrase is cached for it yet.
+    /// Frontends prompt once per key path and call [`crate::ssh::identity::unlock`].
+    KeyPassphraseRequired { host_name: HostId, key_path: String },
+    /// A connection to `host_name` waits for the login password of `login`
+    /// (`user@host`). Frontends answer with [`crate::ssh::password::answer`];
+    /// `retry` says the previous one was refused, and `new_host_key` is the
+    /// fingerprint of a host key first seen on this connection.
+    PasswordRequired {
+        request_id: u64,
+        host_name: HostId,
+        login: String,
+        retry: bool,
+        new_host_key: Option<String>,
+    },
 
     // -----------------------------------------------------------------------
     // Update checker events

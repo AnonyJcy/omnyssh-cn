@@ -1,14 +1,16 @@
 <script lang="ts">
   // Minimal settings (tech-gui.md §4.3): the light/dark theme mirrored from the sidebar
-  // (§5.1), the metric auto-refresh interval (a tauri-plugin-store UI pref), and the
-  // update preferences (`check_on_startup`) + a manual update check. Update prefs persist
-  // to the shared config via `save_update_config`; theme/interval are frontend prefs.
+  // (§5.1), the metric auto-refresh interval and the tray (tauri-plugin-store UI prefs),
+  // and the update preferences (`check_on_startup`) + a manual update check. Update prefs
+  // persist to the shared config via `save_update_config`; the rest are frontend prefs.
   import { onMount } from 'svelte';
   import type { UpdateConfigDto } from '$lib/bindings';
   import { Surface, Icon } from '$lib/theme';
   import { theme } from '$lib/stores/theme';
   import { streamerMode } from '$lib/stores/streamer';
   import { refreshInterval, REFRESH_OPTIONS } from '$lib/stores/settings';
+  import { traySupport, trayBehavior } from '$lib/stores/tray';
+  import { isMac } from '$lib/platform';
   import { offerUpdate } from '$lib/stores/update';
   import { lastError } from '$lib/stores/notifications';
   import { checkUpdate, loadUpdateConfig, saveUpdateConfig } from '$lib/ipc/commands';
@@ -183,6 +185,43 @@
       </div>
     </Surface>
 
+    <!-- Window: the tray keeps sessions and tunnels up with no window on screen. macOS
+         has no minimize event to act on, and keeps minimized windows in the Dock. -->
+    <Surface class="p-5">
+      <h2 class="mb-3 text-sm font-semibold">{$t('settings.window')}</h2>
+      <div class="space-y-4">
+        {#if !isMac}
+          {@render traySwitch(
+            $t('settings.minimize_to_tray'),
+            $traySupport.available && !$traySupport.minimize
+              ? $t('settings.minimize_to_tray_wayland')
+              : $t('settings.minimize_to_tray_desc'),
+            $trayBehavior.minimizeToTray && $traySupport.minimize,
+            $traySupport.minimize,
+            () => trayBehavior.update({ minimizeToTray: !$trayBehavior.minimizeToTray })
+          )}
+        {/if}
+        {@render traySwitch(
+          isMac ? $t('settings.close_to_menu_bar') : $t('settings.close_to_tray'),
+          $t('settings.close_to_tray_desc'),
+          $trayBehavior.closeToTray && $traySupport.available,
+          $traySupport.available,
+          () => trayBehavior.update({ closeToTray: !$trayBehavior.closeToTray })
+        )}
+        {#if !$traySupport.available}
+          <p class="text-xs text-status-warn">
+            {$t('settings.no_tray_warning')}
+          </p>
+        {:else if $trayBehavior.minimizeToTray || $trayBehavior.closeToTray}
+          <!-- Some desktops keep tray icons out of sight (GNOME without the AppIndicator
+               extension, an overflow menu); a second launch always finds the window. -->
+          <p class="text-xs text-muted">
+            {$t('settings.relaunch_hint')}
+          </p>
+        {/if}
+      </div>
+    </Surface>
+
     <!-- Updates -->
     <Surface class="p-5">
       <h2 class="mb-3 text-sm font-semibold">{$t('settings.updates')}</h2>
@@ -237,3 +276,35 @@
     </Surface>
   </div>
 </section>
+
+{#snippet traySwitch(
+  label: string,
+  hint: string,
+  on: boolean,
+  enabled: boolean,
+  toggle: () => void
+)}
+  <div class="flex items-center justify-between gap-4">
+    <div class="min-w-0">
+      <p class="text-sm">{label}</p>
+      <p class="text-xs text-muted">{hint}</p>
+    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={!enabled}
+      onclick={toggle}
+      class="relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus {on
+        ? 'bg-accent'
+        : 'bg-surface-inset'}"
+    >
+      <span
+        class="absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow-soft transition-[left] {on
+          ? 'left-[1.375rem]'
+          : 'left-0.5'}"
+      ></span>
+    </button>
+  </div>
+{/snippet}

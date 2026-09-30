@@ -15,7 +15,10 @@ export const DEMO_HOSTS: HostDto[] = [
     source: 'manual',
     hasKey: true,
     passwordAuthDisabled: true,
-    monitoring: 'ssh'
+    monitoring: 'ssh',
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false
   },
   {
     name: 'prod-db-primary',
@@ -26,7 +29,10 @@ export const DEMO_HOSTS: HostDto[] = [
     source: 'sshConfig',
     hasKey: true,
     passwordAuthDisabled: false,
-    monitoring: 'ssh'
+    monitoring: 'ssh',
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false
   },
   {
     name: 'staging-api',
@@ -37,7 +43,10 @@ export const DEMO_HOSTS: HostDto[] = [
     source: 'manual',
     hasKey: true,
     passwordAuthDisabled: false,
-    monitoring: 'ssh'
+    monitoring: 'ssh',
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false
   },
   {
     name: 'cache-cluster-1',
@@ -48,7 +57,10 @@ export const DEMO_HOSTS: HostDto[] = [
     source: 'manual',
     hasKey: true,
     passwordAuthDisabled: true,
-    monitoring: 'ssh'
+    monitoring: 'ssh',
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false
   },
   {
     name: 'backup-node-eu',
@@ -59,7 +71,10 @@ export const DEMO_HOSTS: HostDto[] = [
     source: 'manual',
     hasKey: true,
     passwordAuthDisabled: false,
-    monitoring: 'ssh'
+    monitoring: 'ssh',
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false
   },
   {
     name: 'monitoring-edge',
@@ -71,7 +86,10 @@ export const DEMO_HOSTS: HostDto[] = [
     hasKey: true,
     passwordAuthDisabled: false,
     monitoring: 'tcpPort',
-    monitorPort: 9100
+    monitorPort: 9100,
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false
   }
 ];
 

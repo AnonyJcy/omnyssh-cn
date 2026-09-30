@@ -11,6 +11,7 @@ import {
   applyProgress,
   applyOpDone,
   formatBytes,
+  rootOf,
   type Pane,
   type SftpSession
 } from './sftp';
@@ -149,6 +150,25 @@ describe('sftp reducers', () => {
     expect(formatBytes(512)).toBe('512 B');
     expect(formatBytes(2048)).toBe('2.0 KB');
     expect(formatBytes(5 * 1024 * 1024)).toBe('5.0 MB');
+  });
+});
+
+describe('rootOf', () => {
+  const drives = ['C:\\', 'D:\\'];
+
+  it('finds the drive a local path is on, whatever the letter case', () => {
+    expect(rootOf('C:\\Users\\me', drives)).toBe('C:\\');
+    expect(rootOf('d:\\Media', drives)).toBe('D:\\');
+    expect(rootOf('D:\\', drives)).toBe('D:\\');
+  });
+
+  it('has no root for a network share or an unknown drive', () => {
+    expect(rootOf('\\\\nas\\share', drives)).toBe('');
+    expect(rootOf('E:\\x', drives)).toBe('');
+  });
+
+  it('puts every path under / on a single-root system', () => {
+    expect(rootOf('/home/me', ['/'])).toBe('/');
   });
 });
 

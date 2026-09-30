@@ -12,11 +12,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppAction, AppState, SnippetPopup, ViewState};
+use crate::app::{forwards_value, AppAction, AppState, SnippetPopup, ViewState};
 use crate::ui::theme::threshold_color;
 use crate::ui::theme::Theme;
 use omnyssh_core::event::{DetectedService, Metrics, ServiceKind};
 use omnyssh_core::ssh::client::{ConnectionStatus, MonitorMode};
+use omnyssh_core::ssh::tunnel::TunnelStatus;
 
 // ---------------------------------------------------------------------------
 // Render
@@ -73,6 +74,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, view: &ViewState)
     let metrics = state.metrics.get(&host.name);
     let status = state.connection_statuses.get(&host.name);
     let services = state.services.get(&host.name);
+    let tunnel = state.tunnel_statuses.get(&host.name);
 
     // Main border with title
     let title = format!(" {} ", host.name);
@@ -106,7 +108,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState, view: &ViewState)
     render_hints(frame, sections[0], &view.theme);
 
     // Header section
-    render_header(frame, sections[1], host, metrics, status, &view.theme);
+    render_header(
+        frame,
+        sections[1],
+        host,
+        metrics,
+        status,
+        tunnel,
+        &view.theme,
+    );
 
     // Separator
     render_separator(frame, sections[2], inner.width, &view.theme);
@@ -151,6 +161,7 @@ fn render_header(
     host: &omnyssh_core::ssh::client::Host,
     metrics: Option<&Metrics>,
     status: Option<&ConnectionStatus>,
+    tunnel: Option<&TunnelStatus>,
     theme: &Theme,
 ) {
     let status_text = match status {
@@ -190,7 +201,7 @@ fn render_header(
         .and_then(|m| m.os_info.as_deref())
         .unwrap_or("(discovery pending)");
 
-    let line2 = Line::from(vec![
+    let mut line2 = Line::from(vec![
         Span::styled(" OS: ", Style::default().fg(theme.text_secondary)),
         Span::styled(
             os_display,
@@ -201,6 +212,27 @@ fn render_header(
             },
         ),
     ]);
+
+    // The forwards come before the state so a long failure reason is what
+    // gets clipped.
+    if !host.local_forwards.is_empty() {
+        let forwards = forwards_value(host);
+        let (state, color) = match tunnel {
+            Some(TunnelStatus::Up) => (String::from("up"), theme.text_success),
+            Some(TunnelStatus::Connecting) => (String::from("connecting"), theme.text_warning),
+            Some(TunnelStatus::Retrying(reason)) => {
+                (format!("retrying: {reason}"), theme.text_warning)
+            }
+            Some(TunnelStatus::Failed(reason)) => (format!("failed: {reason}"), theme.text_error),
+            Some(TunnelStatus::Stopped) | None => (String::from("off"), theme.text_muted),
+        };
+        line2.spans.extend([
+            Span::styled("   Tunnel: ", Style::default().fg(theme.text_secondary)),
+            Span::styled(forwards, Style::default().fg(theme.accent)),
+            Span::raw(" — "),
+            Span::styled(state, Style::default().fg(color)),
+        ]);
+    }
 
     let header_text = vec![line1, line2];
     frame.render_widget(Paragraph::new(header_text), area);
@@ -578,6 +610,14 @@ fn render_hints(frame: &mut Frame, area: Rect, theme: &Theme) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(":Quick view", Style::default().fg(theme.text_muted)),
+        Span::raw("  "),
+        Span::styled(
+            "f",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(":Tunnel", Style::default().fg(theme.text_muted)),
     ]);
 
     frame.render_widget(Paragraph::new(hints), area);
@@ -624,6 +664,9 @@ pub fn handle_input(key: KeyEvent, view: &mut ViewState) -> Option<AppAction> {
         KeyCode::Char('7') => Some(AppAction::ShowQuickView(ServiceKind::Redis)),
         KeyCode::Char('8') => Some(AppAction::ShowQuickView(ServiceKind::NodeJS)),
         KeyCode::Char('9') => None, // Reserved for future use
+
+        // Start / stop this host's tunnel.
+        KeyCode::Char('f') => Some(AppAction::ToggleTunnel),
 
         _ => None,
     }

@@ -19,7 +19,7 @@ use tokio::time;
 use tracing::{error, info, warn};
 
 use crate::ssh::client::Host;
-use crate::ssh::session::{self, SshSession};
+use crate::ssh::session::{self, Passwords, SshSession};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -745,7 +745,9 @@ async fn setup_key_internal(
     test_host.identity_file = Some(private_key_path.to_string_lossy().to_string());
     test_host.password = None; // Force key-only auth.
 
-    match time::timeout(verify_timeout, SshSession::connect(&test_host)).await {
+    // Keys only: a password typed earlier this session would let a broken key
+    // pass, and the next step turns password logins off.
+    match time::timeout(verify_timeout, connect_keys_only(&test_host)).await {
         Ok(Ok(test_session)) => {
             info!("Key authentication verified successfully!");
             test_session.disconnect().await;
@@ -846,7 +848,7 @@ async fn setup_key_internal(
     if let Some(ref tx) = progress_tx {
         let _ = tx.send(KeySetupStep::FinalCheck).await;
     }
-    match time::timeout(verify_timeout, SshSession::connect(&test_host)).await {
+    match time::timeout(verify_timeout, connect_keys_only(&test_host)).await {
         Ok(Ok(final_session)) => {
             info!("Final verification passed! Key setup complete.");
             final_session.disconnect().await;
@@ -871,6 +873,11 @@ async fn setup_key_internal(
             ))
         }
     }
+}
+
+/// Connects with the host's keys and nothing else.
+async fn connect_keys_only(host: &Host) -> Result<SshSession> {
+    SshSession::connect_with(host, Passwords::KeysOnly).await
 }
 
 /// Attempts to rollback sshd_config to the most recent OmnySSH backup.

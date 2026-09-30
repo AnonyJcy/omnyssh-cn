@@ -9,6 +9,32 @@ use crate::ui;
 
 impl App {
     pub(crate) async fn handle_key(&mut self, key: KeyEvent) -> anyhow::Result<Option<AppAction>> {
+        // Enter or Esc just closed an ended tab: a second press must not act on
+        // what took its place, a live shell or, after the last tab, the Dashboard.
+        let tv = &self.view.terminal_view;
+        if matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+            && key.modifiers.is_empty()
+            && tv
+                .closed_ended_at
+                .is_some_and(|at| at.elapsed() < super::terminal::CLOSE_KEY_GRACE)
+        {
+            return Ok(None);
+        }
+
+        let screen = self.state.read().await.screen.clone();
+
+        // A passphrase prompt is modal everywhere but the terminal screen, whose
+        // keys belong to the remote shell. It sits above the update popup too, so
+        // a passphrase being typed never lands on an update button. Ctrl+C
+        // cancels it rather than quitting.
+        if !self.view.passphrase_prompts.is_empty() && !matches!(screen, Screen::Terminal) {
+            return Ok(self.handle_passphrase_key(key));
+        }
+        // Same rules for a login password.
+        if !self.view.password_prompts.is_empty() && !matches!(screen, Screen::Terminal) {
+            return Ok(self.handle_password_key(key));
+        }
+
         // The update popup is modal — it captures all input until dismissed.
         // Ctrl+C still quits as an escape hatch.
         if self.view.update_popup.is_some() {
@@ -18,8 +44,6 @@ impl App {
             self.handle_update_popup_key(key).await;
             return Ok(None);
         }
-
-        let screen = self.state.read().await.screen.clone();
 
         // ----------------------------------------------------------------
         // Terminal screen intercepts ALL keys — including Ctrl+C which must
@@ -200,6 +224,45 @@ impl App {
         Ok(None)
     }
 
+    fn handle_passphrase_key(&mut self, key: KeyEvent) -> Option<AppAction> {
+        let prompt = self.view.passphrase_prompts.first_mut()?;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => Some(AppAction::DismissPassphrase),
+            KeyCode::Char('c') if ctrl => Some(AppAction::DismissPassphrase),
+            _ if prompt.unlocking => None,
+            KeyCode::Enter => Some(AppAction::SubmitPassphrase),
+            KeyCode::Backspace => {
+                prompt.field.backspace();
+                None
+            }
+            KeyCode::Char(c) if !ctrl => {
+                prompt.field.insert_char(c);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_password_key(&mut self, key: KeyEvent) -> Option<AppAction> {
+        let prompt = self.view.password_prompts.first_mut()?;
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc => Some(AppAction::DismissPassword),
+            KeyCode::Char('c') if ctrl => Some(AppAction::DismissPassword),
+            KeyCode::Enter => Some(AppAction::SubmitPassword),
+            KeyCode::Backspace => {
+                prompt.field.backspace();
+                None
+            }
+            KeyCode::Char(c) if !ctrl => {
+                prompt.field.insert_char(c);
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Handles key events when the Terminal screen is active.
     ///
     /// Returns an [`AppAction`] to pass to `process_action`, or forwards the
@@ -323,6 +386,13 @@ impl App {
             }
             // Any other key exits select mode and falls through to normal handling.
             self.view.terminal_view.tab_select_mode = false;
+        }
+
+        // An ended session takes no input: Enter or Esc closes its tab.
+        if self.view.terminal_view.focused_ended_tab().is_some() {
+            let closes =
+                matches!(key.code, KeyCode::Enter | KeyCode::Esc) && key.modifiers.is_empty();
+            return closes.then_some(AppAction::TermCloseEnded);
         }
 
         // Forward everything else as raw bytes to the PTY.

@@ -6,10 +6,12 @@ import { derived } from 'svelte/store';
 import type {
   ConnectionStatusDto,
   HostDto,
+  LocalForwardDto,
   MetricsDto,
   ProcessDto,
   ServiceDto,
-  ServiceKindDto
+  ServiceKindDto,
+  TunnelStatusDto
 } from '$lib/bindings';
 import type { Status } from '$lib/theme';
 import type { SessionKind } from '$lib/stores/sessions';
@@ -17,6 +19,9 @@ import { hosts } from '$lib/stores/hosts';
 import { statuses } from '$lib/stores/statuses';
 import { metrics } from '$lib/stores/metrics';
 import { services, type HostServices } from '$lib/stores/services';
+import { tunnels } from '$lib/stores/tunnels';
+import { displayHostname } from '$lib/stores/streamer';
+import { bracketed } from './hostForm';
 
 // Metric severity mirrors the core's `metrics::threshold_level` (Ok < 60 <= Warn <=
 // 85 < Crit) — the single source of truth for server-state colour (tech-gui.md §5).
@@ -41,12 +46,64 @@ export interface ServerCard {
   offline: boolean;
   /** Set only for a reachability host, which has no metrics to show. */
   reachability?: Reachability;
+  /** Why the last connection attempt failed; unset unless it did. */
+  failure?: string;
   metricRows: MetricRow[];
   uptime?: string;
   osInfo?: string;
   topProcesses: ProcessDto[];
   detectedServices: CardService[];
   servicesError?: string;
+  /** Set only for a host with port forwards. */
+  tunnel?: CardTunnel;
+}
+
+export interface CardTunnel {
+  forwards: LocalForwardDto[];
+  /** Connecting, up or retrying — what a Stop button stops. */
+  running: boolean;
+  dot: Status;
+  label: string;
+  /** Why the last attempt failed, while retrying or after giving up. */
+  message?: string;
+  autostart: boolean;
+}
+
+/** A host's tunnel as its card shows it; `undefined` when it has no forwards. */
+export function deriveTunnel(host: HostDto, status: TunnelStatusDto | undefined): CardTunnel | undefined {
+  if (host.localForwards.length === 0) return undefined;
+  const base = { forwards: host.localForwards, autostart: host.tunnelAutostart };
+  switch (status?.kind) {
+    case 'connecting':
+      return { ...base, running: true, dot: 'unknown', label: 'Connecting…' };
+    case 'up':
+      return { ...base, running: true, dot: 'ok', label: 'Active' };
+    case 'retrying':
+      return { ...base, running: true, dot: 'warn', label: 'Reconnecting…', message: status.message };
+    case 'failed':
+      return { ...base, running: false, dot: 'off', label: 'Failed', message: status.message };
+    default:
+      return { ...base, running: false, dot: 'unknown', label: 'Off' };
+  }
+}
+
+// Loopback and wildcard addresses reveal nothing, and read wrong disguised.
+const REVEALS_NOTHING = /^(localhost|127(\.\d{1,3}){3}|::1|\*|0\.0\.0\.0|::)$/i;
+
+/** An address as a forward shows it: masked in streamer mode like any host address. */
+function shown(address: string, streamerOn: boolean): string {
+  return REVEALS_NOTHING.test(address) ? address : displayHostname(address, streamerOn);
+}
+
+/** Where a forward listens: `localhost` unless the rule names an address, `*` for all. */
+export function forwardListen(f: LocalForwardDto, streamerOn: boolean): string {
+  const bind = f.bindAddress == null ? 'localhost' : f.bindAddress === '' ? '*' : f.bindAddress;
+  return `${bracketed(shown(bind, streamerOn))}:${f.bindPort}`;
+}
+
+/** Where a forward leads, resolved on the server. */
+export function forwardTarget(f: LocalForwardDto, streamerOn: boolean): string {
+  return `${bracketed(shown(f.remoteHost, streamerOn))}:${f.remotePort}`;
 }
 
 const SEVERITY: Status[] = ['ok', 'warn', 'crit'];
@@ -95,7 +152,8 @@ export function deriveCard(
   host: HostDto,
   status: ConnectionStatusDto | undefined,
   m: MetricsDto | undefined,
-  svc: HostServices | undefined
+  svc: HostServices | undefined,
+  tunnel?: TunnelStatusDto
 ): ServerCard {
   // A reachability host is probed by a TCP connect and never reports metrics, so
   // the tiles would be a fiction — the card shows the probe result instead.
@@ -106,9 +164,11 @@ export function deriveCard(
       overall: kind === 'connected' ? 'ok' : kind === 'failed' ? 'off' : 'unknown',
       offline: kind === 'failed',
       reachability: kind === 'connected' ? 'reachable' : kind === 'failed' ? 'unreachable' : 'checking',
+      failure: failureOf(status),
       metricRows: [],
       topProcesses: [],
-      detectedServices: []
+      detectedServices: [],
+      tunnel: deriveTunnel(host, tunnel)
     };
   }
 
@@ -134,21 +194,33 @@ export function deriveCard(
     host,
     overall,
     offline,
+    failure: failureOf(status),
     metricRows,
     uptime: m?.uptime ?? undefined,
     osInfo: m?.osInfo ?? undefined,
     topProcesses: m?.topProcesses ?? [],
     detectedServices,
-    servicesError: svc?.kind === 'failed' ? svc.message : undefined
+    servicesError: svc?.kind === 'failed' ? svc.message : undefined,
+    tunnel: deriveTunnel(host, tunnel)
   };
+}
+
+function failureOf(status: ConnectionStatusDto | undefined): string | undefined {
+  return status?.kind === 'failed' ? status.message : undefined;
 }
 
 /** Live dashboard cards, one per host, recomputed as any live store changes. */
 export const serverCards = derived(
-  [hosts, statuses, metrics, services],
-  ([$hosts, $statuses, $metrics, $services]) =>
+  [hosts, statuses, metrics, services, tunnels],
+  ([$hosts, $statuses, $metrics, $services, $tunnels]) =>
     $hosts.map((host) =>
-      deriveCard(host, $statuses.get(host.name), $metrics.get(host.name), $services.get(host.name))
+      deriveCard(
+        host,
+        $statuses.get(host.name),
+        $metrics.get(host.name),
+        $services.get(host.name),
+        $tunnels.get(host.name)
+      )
     )
 );
 

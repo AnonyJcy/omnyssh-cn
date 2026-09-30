@@ -53,6 +53,8 @@
 
 > **无账号、无遥测、无数据上传**：应用本地运行，自动读取你的 `~/.ssh/config` 配置，隐私安全。
 
+Keys with a passphrase work too. When a key is encrypted, OmnySSH asks for its passphrase once and keeps it in memory until you quit; it is never written to disk. On macOS and Linux a key already loaded in `ssh-agent` is used without asking. The host **Password** field is the server login password, not a key passphrase.
+
 ---
 
 ## 自动化同步与维护
@@ -65,6 +67,25 @@
 
 ## 致敬原作者与开源协议
 
+## 致敬原作者与开源协议
+
 - **官方上游仓库**：[timhartmann7/omnyssh](https://github.com/timhartmann7/omnyssh)
 - **开源协议**：[Apache License 2.0](LICENSE)
 - 感谢原作者 **Tim Hartmann**（[@timhartmann7](https://github.com/timhartmann7)）打造的开源工具。
+
+---
+
+## 常见问题排查 (Troubleshooting)
+
+- **macOS：局域网主机连接提示 "No route to host"**：macOS 默认限制应用访问本地局域网设备。请前往系统设置 → 隐私与安全性 → 本地网络 (Local Network)，允许 OmnySSH 访问后重启应用即可。
+- **群晖 (Synology NAS)：终端输入密码后提示 "Permission denied, please try again." 并退出**：Synology DSM 默认仅向管理员群组（administrators）账户分配 Shell 终端权限，普通用户登录将被拒绝并断开，但 SFTP 文件传输仍可正常使用。
+
+<div align="center">
+
+### ⭐ 如果 OmnySSH 对你有帮助，欢迎在 GitHub 上点个 Star！
+
+[提交问题反馈](https://github.com/AnonyJcy/omnyssh-cn/issues) •
+[功能需求建议](https://github.com/AnonyJcy/omnyssh-cn/issues) •
+[官方项目原址](https://github.com/timhartmann7/omnyssh)
+
+</div>

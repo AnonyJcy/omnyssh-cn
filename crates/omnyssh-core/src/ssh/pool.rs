@@ -20,11 +20,13 @@ use tokio::time;
 
 use crate::event::{CoreEvent, Metrics, ProcessInfo};
 use crate::ssh::client::{ConnectionStatus, Host, MonitorMode};
+use crate::ssh::identity;
 use crate::ssh::metrics::{
     parse_cpu_proc_stat, parse_cpu_top, parse_cpu_top_macos, parse_disk_df, parse_loadavg,
     parse_ram_free, parse_ram_vmstat, parse_top_processes, parse_uptime,
 };
-use crate::ssh::session::SshSession;
+use crate::ssh::password;
+use crate::ssh::session::{dial_error, passphrase_required, waiting_login, SshSession};
 
 // ---------------------------------------------------------------------------
 // Backoff schedule
@@ -185,7 +187,7 @@ async fn run_tcp_poller(
 
         let status = match time::timeout(TCP_PROBE_TIMEOUT, TcpStream::connect(&addr)).await {
             Ok(Ok(_)) => ConnectionStatus::Connected,
-            Ok(Err(e)) => ConnectionStatus::Failed(e.to_string()),
+            Ok(Err(e)) => ConnectionStatus::Failed(dial_error(&e)),
             Err(_) => ConnectionStatus::Failed(format!("no answer from {addr}")),
         };
         let reachable = matches!(status, ConnectionStatus::Connected);
@@ -239,11 +241,35 @@ async fn run_ssh_poller(
                     discovery_done = false; // Reset discovery flag on new connection
                 }
                 Err(e) => {
-                    tracing::debug!(host = %host.name, error = %e, "connection failed");
-                    send_status(&tx, &host.name, ConnectionStatus::Failed(e.to_string())).await;
-                    // Wait with backoff, allowing early refresh.
+                    // The whole chain: "SSH connection failed" alone does not say
+                    // whether the port was closed, the name did not resolve or the
+                    // host key changed.
+                    let reason = format!("{e:#}");
+                    tracing::debug!(host = %host.name, error = %reason, "connection failed");
+                    send_status(&tx, &host.name, ConnectionStatus::Failed(reason)).await;
                     let delay = backoff.next_delay();
-                    wait_backoff(delay, &mut refresh_rx).await;
+                    let Some(login) = waiting_login(&e).map(str::to_owned) else {
+                        // Wait with backoff, allowing early refresh.
+                        wait_backoff(delay, &mut refresh_rx).await;
+                        continue;
+                    };
+                    // A poller never asks for a password, only for a passphrase.
+                    // Unlocking the key, or typing the password elsewhere (a
+                    // terminal), is what changes the outcome, so either ends the wait.
+                    let locked = passphrase_required(&e).map(str::to_owned);
+                    if let Some(path) = &locked {
+                        identity::ask_passphrase_once(&tx, &host.name, path).await;
+                    }
+                    tokio::select! {
+                        () = wait_backoff(delay, &mut refresh_rx) => {}
+                        () = password::remembered(&login) => {}
+                        () = async {
+                            match &locked {
+                                Some(path) => identity::unlocked(path).await,
+                                None => std::future::pending().await,
+                            }
+                        } => {}
+                    }
                     continue;
                 }
             }

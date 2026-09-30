@@ -23,7 +23,10 @@ import {
   applySftpOpDone,
   applySnippetResult,
   applyTerminalExited,
-  applyTransferProgress
+  applyTransferProgress,
+  applyTunnelStatusChanged,
+  applyKeyPassphraseRequired,
+  applyPasswordRequired
 } from './router';
 
 export async function startEventBridge(): Promise<() => void> {
@@ -34,8 +37,13 @@ export async function startEventBridge(): Promise<() => void> {
     offs.push(await events.metricsUpdated.listen((e) => applyMetricsUpdated(e.payload)));
     offs.push(await events.servicesDetected.listen((e) => applyServicesDetected(e.payload)));
     offs.push(await events.servicesFailed.listen((e) => applyServicesFailed(e.payload)));
+    offs.push(await events.tunnelStatusChanged.listen((e) => applyTunnelStatusChanged(e.payload)));
     offs.push(await events.snippetResult.listen((e) => applySnippetResult(e.payload)));
-    offs.push(await events.terminalExited.listen((e) => applyTerminalExited(e.payload.sessionId)));
+    offs.push(
+      await events.terminalExited.listen((e) =>
+        applyTerminalExited(e.payload.sessionId, e.payload.hadOutput)
+      )
+    );
     offs.push(await events.sftpConnected.listen((e) => applySftpConnected(e.payload)));
     offs.push(await events.sftpDirListed.listen((e) => applySftpDirListed(e.payload)));
     offs.push(await events.sftpOpDone.listen((e) => applySftpOpDone(e.payload)));
@@ -47,6 +55,8 @@ export async function startEventBridge(): Promise<() => void> {
     offs.push(await events.keySetupFailed.listen((e) => applyKeySetupFailed(e.payload)));
     offs.push(await events.keySetupRollback.listen((e) => applyKeySetupRollback(e.payload)));
     offs.push(await events.updateAvailable.listen((e) => applyUpdateAvailable(e.payload)));
+    offs.push(await events.keyPassphraseRequired.listen((e) => applyKeyPassphraseRequired(e.payload)));
+    offs.push(await events.passwordRequired.listen((e) => applyPasswordRequired(e.payload)));
     offs.push(await events.error.listen((e) => applyError(e.payload.message)));
   } catch (err) {
     offs.forEach((off) => off());

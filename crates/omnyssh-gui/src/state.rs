@@ -13,10 +13,11 @@ use omnyssh_core::ssh::client::Host;
 use omnyssh_core::ssh::pool::PollManager;
 use omnyssh_core::ssh::pty::PtyManager;
 use omnyssh_core::ssh::sftp::{SftpCommand, SftpManager};
+use omnyssh_core::ssh::tunnel::TunnelManager;
 use tauri::ipc::Channel;
 use tokio::sync::mpsc;
 
-use crate::dto::{HostDto, TerminalBytes};
+use crate::dto::{HostDto, TerminalBytes, TunnelStatusDto};
 
 /// Metric poll cadence. Mirrors the TUI's fixed interval; a configurable refresh
 /// interval lands with settings in Stage 4.3 (tech-gui.md §4.3).
@@ -94,6 +95,14 @@ pub struct GuiState {
     key_setup: Mutex<Option<String>>,
     /// Public id <-> inner handle mapping for all sessions.
     sessions: Mutex<SessionRegistry>,
+    /// Every host's port-forwarding tunnel. Unlike the pollers it is never rebuilt on
+    /// reload — that would drop live tunnels on each save — only reconciled.
+    tunnels: Mutex<TunnelManager>,
+    /// One-shot latch so tunnels autostart once, on the first successful host load.
+    tunnels_autostarted: AtomicBool,
+    /// The last status of every tunnel that has not stopped, replayed to a
+    /// frontend that reloads while its tunnels keep running.
+    tunnel_statuses: Mutex<HashMap<String, TunnelStatusDto>>,
     /// Shared engine channel the bridge drains; cloned to `PollManager`/`PtyManager`.
     engine_tx: mpsc::Sender<CoreEvent>,
 }
@@ -111,6 +120,9 @@ impl GuiState {
             update_check_started: AtomicBool::new(false),
             key_setup: Mutex::new(None),
             sessions: Mutex::new(SessionRegistry::default()),
+            tunnels: Mutex::new(TunnelManager::new(engine_tx.clone())),
+            tunnels_autostarted: AtomicBool::new(false),
+            tunnel_statuses: Mutex::new(HashMap::new()),
             engine_tx,
         }
     }
@@ -209,6 +221,99 @@ impl GuiState {
         ));
     }
 
+    /// Start (or restart) `name`'s tunnel. Must run inside the Tauri async runtime —
+    /// the tunnel is a tokio task.
+    pub fn start_tunnel(&self, name: &str) -> Result<(), String> {
+        let host = self
+            .host_by_name(name)
+            .ok_or_else(|| format!("unknown host '{name}'"))?;
+        if host.local_forwards.is_empty() {
+            return Err(format!("'{name}' has no port forwards"));
+        }
+        self.tunnels
+            .lock()
+            .expect("tunnels lock poisoned")
+            .start(host);
+        Ok(())
+    }
+
+    /// Stop `name`'s tunnel; a no-op when none runs.
+    pub fn stop_tunnel(&self, name: &str) {
+        self.tunnels
+            .lock()
+            .expect("tunnels lock poisoned")
+            .stop(name);
+    }
+
+    /// Apply a reloaded host list to the running tunnels: restart the ones whose
+    /// connection or rules changed, stop the ones whose host or rules are gone.
+    pub fn sync_tunnels(&self) {
+        let hosts = self.hosts.read().expect("hosts lock poisoned").clone();
+        self.tunnels
+            .lock()
+            .expect("tunnels lock poisoned")
+            .sync(&hosts);
+    }
+
+    /// Start every tunnel marked to start on launch — once, on the first call that
+    /// finds hosts loaded. Driven from `reload_hosts`, so the statuses reach a
+    /// frontend that is already listening (§3.4).
+    pub fn autostart_tunnels(&self) {
+        if self
+            .tunnels_autostarted
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        let hosts = self.hosts.read().expect("hosts lock poisoned").clone();
+        self.tunnels
+            .lock()
+            .expect("tunnels lock poisoned")
+            .autostart(&hosts);
+    }
+
+    /// Record a tunnel's status and `emit` it under one lock, so a replay can never
+    /// deliver an older status after a newer one.
+    pub fn tunnel_status_changed(
+        &self,
+        host_name: &str,
+        status: &TunnelStatusDto,
+        emit: impl FnOnce(),
+    ) {
+        let mut statuses = self
+            .tunnel_statuses
+            .lock()
+            .expect("tunnel_statuses lock poisoned");
+        if matches!(status, TunnelStatusDto::Stopped) {
+            statuses.remove(host_name);
+        } else {
+            statuses.insert(host_name.to_string(), status.clone());
+        }
+        emit();
+    }
+
+    /// `emit` the last status of every tunnel of a host still in the list — the
+    /// frontend's store is empty after a reload (§3.4). A status left by a host
+    /// that is gone is dropped here.
+    pub fn replay_tunnel_statuses(&self, mut emit: impl FnMut(&str, &TunnelStatusDto)) {
+        let names: Vec<String> = self
+            .hosts
+            .read()
+            .expect("hosts lock poisoned")
+            .iter()
+            .map(|h| h.name.clone())
+            .collect();
+        let mut statuses = self
+            .tunnel_statuses
+            .lock()
+            .expect("tunnel_statuses lock poisoned");
+        statuses.retain(|name, _| names.contains(name));
+        for (name, status) in statuses.iter() {
+            emit(name, status);
+        }
+    }
+
     /// Open a terminal for `host_name`, wiring its raw-output `channel`, and return
     /// the public session id. The session task starts here but cannot emit output
     /// until it connects, so registering the channel right after `open` beats the
@@ -293,17 +398,16 @@ impl GuiState {
     }
 
     /// Route a raw PTY chunk (keyed by inner id) into its tab's channel. Called by
-    /// the raw-output forwarder; unknown/closed ids are dropped (§3.6).
-    pub fn send_terminal_output(&self, inner: SessionId, bytes: Vec<u8>) {
+    /// the raw-output forwarder; unknown/closed ids are dropped (§3.6). `true` when a
+    /// tab took it.
+    pub fn send_terminal_output(&self, inner: SessionId, bytes: Vec<u8>) -> bool {
         let channel = self
             .term_channels
             .lock()
             .expect("term_channels lock poisoned")
             .get(&inner)
             .cloned();
-        if let Some(channel) = channel {
-            let _ = channel.send(TerminalBytes(bytes));
-        }
+        channel.is_some_and(|channel| channel.send(TerminalBytes(bytes)).is_ok())
     }
 
     /// Remote-side exit: map the inner id to its public id and drop all routing
@@ -561,5 +665,89 @@ mod tests {
         let state = GuiState::new(engine_tx, PtyManager::new());
         let channel = Channel::new(|_| Ok(()));
         assert!(state.open_terminal("nope", 80, 24, channel).is_err());
+    }
+
+    fn tunnel_host(name: &str, autostart: bool, forwards: &[&str]) -> Host {
+        Host {
+            name: name.to_string(),
+            // Nothing answers on port 1, so a started tunnel just keeps retrying.
+            hostname: "127.0.0.1".to_string(),
+            port: 1,
+            local_forwards: forwards.iter().map(|f| f.parse().expect("rule")).collect(),
+            tunnel_autostart: autostart,
+            ..Host::default()
+        }
+    }
+
+    /// A loopback port nothing listens on right now.
+    fn free_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        probe.local_addr().expect("addr").port()
+    }
+
+    #[tokio::test]
+    async fn start_tunnel_needs_a_known_host_with_forwards() {
+        let (engine_tx, _engine_rx) = mpsc::channel::<CoreEvent>(8);
+        let state = GuiState::new(engine_tx, PtyManager::new());
+        state.set_hosts(vec![tunnel_host("bare", false, &[])]);
+        assert!(state
+            .start_tunnel("ghost")
+            .unwrap_err()
+            .contains("unknown host"));
+        assert!(state
+            .start_tunnel("bare")
+            .unwrap_err()
+            .contains("no port forwards"));
+    }
+
+    #[tokio::test]
+    async fn tunnels_autostart_once_and_only_where_asked() {
+        let (engine_tx, _engine_rx) = mpsc::channel::<CoreEvent>(64);
+        let state = GuiState::new(engine_tx, PtyManager::new());
+        let rule = |port: u16| format!("{port}:localhost:80");
+        state.set_hosts(vec![
+            tunnel_host("auto", true, &[&rule(free_port())]),
+            tunnel_host("manual", false, &[&rule(free_port())]),
+            tunnel_host("empty", true, &[]),
+        ]);
+
+        state.autostart_tunnels();
+        let running = |name| state.tunnels.lock().unwrap().is_running(name);
+        assert!(running("auto"));
+        assert!(!running("manual") && !running("empty"));
+
+        // A later reload must not start what the user has since stopped.
+        state.stop_tunnel("auto");
+        state.autostart_tunnels();
+        assert!(!running("auto"));
+    }
+
+    #[test]
+    fn a_reloaded_frontend_gets_the_live_tunnel_statuses_back() {
+        let (engine_tx, _engine_rx) = mpsc::channel::<CoreEvent>(8);
+        let state = GuiState::new(engine_tx, PtyManager::new());
+        state.set_hosts(vec![
+            tunnel_host("up", false, &[]),
+            tunnel_host("down", false, &[]),
+        ]);
+
+        let mut emitted = 0;
+        let retrying = TunnelStatusDto::Retrying {
+            message: "connection lost".to_string(),
+        };
+        state.tunnel_status_changed("up", &TunnelStatusDto::Up, || emitted += 1);
+        state.tunnel_status_changed("down", &retrying, || emitted += 1);
+        state.tunnel_status_changed("down", &TunnelStatusDto::Stopped, || emitted += 1);
+        state.tunnel_status_changed("gone", &TunnelStatusDto::Up, || emitted += 1);
+        assert_eq!(emitted, 4, "every change still goes out live");
+
+        // Only a tunnel that has not stopped, of a host still listed, comes back.
+        let mut replayed = Vec::new();
+        state.replay_tunnel_statuses(|name, status| {
+            replayed.push((name.to_string(), status.clone()))
+        });
+        assert_eq!(replayed.len(), 1);
+        assert_eq!(replayed[0].0, "up");
+        assert!(matches!(replayed[0].1, TunnelStatusDto::Up));
     }
 }

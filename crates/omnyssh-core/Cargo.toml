@@ -2,6 +2,7 @@
 name = "omnyssh-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "SSH engine, configs, metrics, and updater powering OmnySSH frontends"
 license.workspace = true
 repository.workspace = true
@@ -9,12 +10,13 @@ keywords = ["ssh", "devops"]
 categories = ["network-programming"]
 
 [dependencies]
-tokio = { workspace = true }
+# `net`: the local listeners of port forwarding.
+tokio = { workspace = true, features = ["net"] }
 
-# SSH
-russh = "0.46"
+# SSH. The ring backend, not aws-lc-rs: aws-lc-sys needs cmake and NASM on
+# Windows. flate2 keeps zlib compression.
+russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa", "flate2"] }
 russh-sftp = "2.0"
-russh-keys = "0.46"
 
 # Serialization
 serde = { workspace = true }
@@ -27,7 +29,7 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
-# Required for implementing russh::client::Handler (uses #[async_trait])
+# Async traits used as trait objects: password prompts, service providers
 async-trait = "0.1"
 
 # Feature B: Auto SSH Key Setup — timestamp generation
@@ -49,6 +51,10 @@ sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
 self-replace = "1"
+
+# The drive letters the local file panes can switch to. Already built for tokio.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

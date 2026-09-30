@@ -9,6 +9,7 @@ import type {
   HostInputDto,
   SnippetDto,
   TerminalBytes,
+  TraySupportDto,
   UpdateConfigDto,
   UpdateInfoDto
 } from '$lib/bindings';
@@ -164,6 +165,11 @@ export async function listLocalDir(path: string): Promise<FileEntryDto[]> {
   return res.data;
 }
 
+/** The roots the local pane can switch to: drive letters on Windows, `/` elsewhere. */
+export async function listLocalRoots(): Promise<string[]> {
+  return commands.listLocalRoots();
+}
+
 /** Read up to 4 KiB of a local file as UTF-8 for preview. */
 export async function previewLocalFile(path: string): Promise<string> {
   const res = await commands.previewLocalFile(path);
@@ -182,6 +188,36 @@ export async function startKeySetup(hostName: string): Promise<void> {
 export async function restorePasswordAuth(hostName: string): Promise<void> {
   const res = await commands.restorePasswordAuth(hostName);
   if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Start (or restart) a host's tunnel; its progress arrives as `tunnel-status-changed`
+ *  (tech-gui.md §4.2). Rejects an unknown host or one without port forwards. */
+export async function tunnelStart(hostName: string): Promise<void> {
+  const res = await commands.tunnelStart(hostName);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Stop a host's tunnel; a no-op when none runs. */
+export async function tunnelStop(hostName: string): Promise<void> {
+  const res = await commands.tunnelStop(hostName);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Paste into the focused terminal through the webview's own paste, for the Ctrl+Shift+V
+ *  WebKitGTK misses under a non-Latin layout. */
+export async function terminalPaste(): Promise<void> {
+  const res = await commands.terminalPaste();
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Minimize and close to the tray, or not; resolves to what this desktop allows. */
+export async function setTrayBehavior(
+  minimizeToTray: boolean,
+  closeToTray: boolean
+): Promise<TraySupportDto> {
+  const res = await commands.setTrayBehavior(minimizeToTray, closeToTray);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
 }
 
 /** Force an immediate metric poll of every host (tech-gui.md §4.2). */
@@ -214,5 +250,17 @@ export async function loadUpdateConfig(): Promise<UpdateConfigDto> {
 /** Persist the update-checker preferences to the shared config (tech-gui.md §4.3). */
 export async function saveUpdateConfig(config: UpdateConfigDto): Promise<void> {
   const res = await commands.saveUpdateConfig(config);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Decrypt an identity file with `passphrase` and cache it for this process. */
+export async function unlockIdentity(keyPath: string, passphrase: string): Promise<void> {
+  const res = await commands.unlockIdentity(keyPath, passphrase);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Answer a login's password prompt; `null` cancels the login. */
+export async function answerPassword(requestId: number, password: string | null): Promise<void> {
+  const res = await commands.answerPassword(requestId, password);
   if (res.status === 'error') throw new Error(res.error.message);
 }

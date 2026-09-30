@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::dto::{
     ConnectionStatusDto, FileEntryDto, HostDto, KeySetupStepDto, MetricsDto, ServiceDto,
-    TransferProgressDto, UpdateInfoDto,
+    TransferProgressDto, TunnelStatusDto, UpdateInfoDto,
 };
 
 /// Full host list broadcast. Emitted by `reload_hosts` after refreshing the
@@ -47,6 +47,14 @@ pub struct ServicesFailed {
     pub message: String,
 }
 
+/// A host's port-forwarding tunnel changed state (tech-gui.md §4.3).
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelStatusChanged {
+    pub host_name: String,
+    pub status: TunnelStatusDto,
+}
+
 /// Result of running a snippet on one host (tech-gui.md §4.3). Emitted directly by
 /// `execute_snippet` per host (one-shot `SshSession::run_command`), not via the
 /// shared bridge — the same "the command owns the result" pattern the SFTP
@@ -62,12 +70,15 @@ pub struct SnippetResult {
 }
 
 /// A terminal session's remote shell exited or its connection dropped (tech-gui.md
-/// §4.3). Carries the **public** registry id (the bridge maps the core's inner PTY
-/// id, §3.4); the frontend tears the tab down. User-initiated closes never emit this.
+/// §4.3). Carries the **public** registry id (the forwarder maps the core's inner PTY
+/// id, §3.4). A tab that got output stays open on its last screen, closed by the user;
+/// one that never did (a failed connect) is torn down. User-initiated closes never
+/// emit this.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalExited {
     pub session_id: u64,
+    pub had_output: bool,
 }
 
 /// An SFTP session connected (tech-gui.md §4.3). The per-session forwarder stamps
@@ -167,6 +178,29 @@ pub struct KeySetupRollback {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAvailable {
     pub info: UpdateInfoDto,
+}
+
+/// A private key is encrypted and no passphrase is cached yet. Frontends prompt
+/// once per key path; the passphrase never crosses back out of the backend.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPassphraseRequired {
+    pub host_name: String,
+    pub key_path: String,
+}
+
+/// A connection waits for the login password of `login` (`user@host`). Answered
+/// with `answer_password`; the password only ever crosses inbound. `retry` says
+/// the previous one was refused; `newHostKey` is the fingerprint of a host key
+/// first seen on this connection, to check before typing.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordRequired {
+    pub request_id: u64,
+    pub host_name: String,
+    pub login: String,
+    pub retry: bool,
+    pub new_host_key: Option<String>,
 }
 
 /// A background error surfaced to the user.

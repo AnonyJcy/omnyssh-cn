@@ -6,23 +6,27 @@ import type {
   ConnectionStatusDto,
   FilePreview,
   HostDto,
+  KeyPassphraseRequired,
   KeySetupComplete,
   KeySetupFailed,
   KeySetupProgress,
   KeySetupRollback,
   MetricsDto,
+  PasswordRequired,
   ServiceDto,
   SftpConnected,
   SftpDirListed,
   SftpDisconnected,
   SftpOpDone,
   SnippetResult,
-  TransferProgressDto
+  TransferProgressDto,
+  TunnelStatusChanged
 } from '$lib/bindings';
 import { hosts } from '$lib/stores/hosts';
 import { statuses } from '$lib/stores/statuses';
 import { metrics, mergeMetrics } from '$lib/stores/metrics';
 import { services } from '$lib/stores/services';
+import { tunnels } from '$lib/stores/tunnels';
 import { snippetRun, reduceRunResult } from '$lib/stores/snippets';
 import { sessions } from '$lib/stores/sessions';
 import { sftp } from '$lib/stores/sftp';
@@ -35,6 +39,8 @@ import {
   reduceProgress,
   reduceRollback
 } from '$lib/stores/keySetup';
+import { enqueuePassphrase, passphraseQueue } from '$lib/stores/passphrase';
+import { passwordQueue } from '$lib/stores/password';
 import { offerUpdate } from '$lib/stores/update';
 import type { UpdateAvailable } from '$lib/bindings';
 
@@ -47,6 +53,7 @@ export function applyHostsLoaded(payload: HostDto[]): void {
   statuses.update(prune);
   metrics.update(prune);
   services.update(prune);
+  tunnels.update(prune);
 }
 
 export function applyHostStatusChanged(payload: {
@@ -70,29 +77,46 @@ export function applyServicesFailed(payload: { hostName: string; message: string
   services.update((m) => new Map(m).set(payload.hostName, { kind: 'failed', message: payload.message }));
 }
 
+// A stopped tunnel leaves no entry, so a host that is renamed or deleted while its
+// tunnel winds down does not keep a stale one.
+export function applyTunnelStatusChanged(payload: TunnelStatusChanged): void {
+  tunnels.update((m) => {
+    const next = new Map(m);
+    if (payload.status.kind === 'stopped') next.delete(payload.hostName);
+    else next.set(payload.hostName, payload.status);
+    return next;
+  });
+}
+
 export function applySnippetResult(payload: SnippetResult): void {
   snippetRun.update((run) => reduceRunResult(run, payload));
 }
 
 // A terminal's remote shell exited or its connection dropped (tech-gui.md §3.4). The
-// backend already tore down its session; drop the matching tab (by its backend id).
-// A user-initiated close never emits this, so there is no double-teardown.
+// backend already tore down its session. A tab that showed output stays, marked
+// closed, so whatever the server said last can still be read; one that never did (a
+// failed connect, whose reason is in the status bar) is dropped. A user-initiated
+// close never emits this, so there is no double-teardown.
 //
 // An instant-fail connect can emit terminal-exited before terminalOpen resolves, so
 // the tab has no termId yet: park the id and let the tab reconcile once it records
 // its backend id (`terminalDidExit`), rather than stranding a dead tab open.
-const exitedBeforeMapped = new Set<number>();
+const exitedBeforeMapped = new Map<number, boolean>();
 
-export function applyTerminalExited(sessionId: number): void {
+export function applyTerminalExited(sessionId: number, hadOutput: boolean): void {
   const target = get(sessions).find((s) => s.termId === sessionId);
-  if (target) closeSession(target.id);
-  else exitedBeforeMapped.add(sessionId);
+  if (!target) exitedBeforeMapped.set(sessionId, hadOutput);
+  else if (hadOutput) sessions.setStatus(target.id, 'closed');
+  else closeSession(target.id);
 }
 
-/** Whether backend session `termId` already exited before its tab recorded it (the
- *  fast-fail race); consumes the pending flag. Called right after a tab sets termId. */
-export function terminalDidExit(termId: number): boolean {
-  return exitedBeforeMapped.delete(termId);
+/** Whether backend session `termId` exited before its tab recorded it (the fast-fail
+ *  race): its `hadOutput`, or `undefined` if it did not. Consumes the pending entry;
+ *  called right after a tab sets termId. */
+export function terminalDidExit(termId: number): boolean | undefined {
+  const hadOutput = exitedBeforeMapped.get(termId);
+  exitedBeforeMapped.delete(termId);
+  return hadOutput;
 }
 
 // SFTP events (tech-gui.md §3.4/§4.3). Each carries the backend session id the sftp
@@ -151,4 +175,15 @@ export function applyUpdateAvailable(payload: UpdateAvailable): void {
 
 export function applyError(message: string): void {
   lastError.set(message);
+}
+
+// An encrypted key the core could not use (tech-gui.md §4.3). Queued per key, so
+// the hosts sharing it wait on one dialog.
+export function applyKeyPassphraseRequired(payload: KeyPassphraseRequired): void {
+  passphraseQueue.update((queue) => enqueuePassphrase(queue, payload));
+}
+
+// A login waiting for its password (tech-gui.md §4.3); answered by `answer_password`.
+export function applyPasswordRequired(payload: PasswordRequired): void {
+  passwordQueue.update((queue) => [...queue, payload]);
 }

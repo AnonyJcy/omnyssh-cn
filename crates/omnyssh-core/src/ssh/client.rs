@@ -3,7 +3,9 @@
 //! Connections delegated to the system SSH binary.
 //! Also provides russh-based client for live metrics.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::ssh::tunnel::LocalForward;
 
 /// Indicates where a host entry originated.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -57,6 +59,11 @@ pub struct Host {
     /// Path to the private key file (e.g. `~/.ssh/id_ed25519`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_file: Option<String>,
+    /// Offer only the identity file's key (the default keys without one), even
+    /// from the agent: `IdentitiesOnly yes`. An agent holding many keys would
+    /// otherwise use up the server's `MaxAuthTries` first.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub identities_only: bool,
     /// Password for password-based authentication (not recommended, used for initial setup).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
@@ -82,6 +89,20 @@ pub struct Host {
     /// Port for the reachability probe. Falls back to `port` when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor_port: Option<u16>,
+    /// Local port forwards (`ssh -L`) carried by this host's tunnel.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "readable_forwards"
+    )]
+    pub local_forwards: Vec<LocalForward>,
+    /// Start the tunnel when OmnySSH starts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tunnel_autostart: bool,
+    /// Lend the local SSH agent to this host's terminals (`ssh -A`). Anyone with
+    /// root on the host can use it while a terminal is open, so it is opt-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forward_agent: bool,
 
     // -----------------------------------------------------------------------
     // Auto SSH Key Setup metadata
@@ -92,6 +113,19 @@ pub struct Host {
     /// Whether password authentication has been disabled on the server.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password_auth_disabled: Option<bool>,
+}
+
+/// Reads the forwards one by one, dropping an unreadable rule with a warning:
+/// failing it would fail the whole file, and every manual host with it.
+fn readable_forwards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<LocalForward>, D::Error> {
+    Ok(Vec::<String>::deserialize(d)?
+        .into_iter()
+        .filter_map(|spec| {
+            spec.parse()
+                .map_err(|e| tracing::warn!(error = %e, "port forward skipped"))
+                .ok()
+        })
+        .collect())
 }
 
 fn default_user() -> String {
@@ -112,6 +146,7 @@ impl Default for Host {
             user: default_user(),
             port: default_port(),
             identity_file: None,
+            identities_only: false,
             password: None,
             proxy_jump: None,
             tags: Vec::new(),
@@ -120,6 +155,9 @@ impl Default for Host {
             original_ssh_host: None,
             monitoring: MonitorMode::default(),
             monitor_port: None,
+            local_forwards: Vec::new(),
+            tunnel_autostart: false,
+            forward_agent: false,
             key_setup_date: None,
             password_auth_disabled: None,
         }
@@ -171,6 +209,22 @@ mod tests {
             .unwrap_or_else(|e| panic!("'{spelling}' should parse: {e}"));
             assert_eq!(host.monitoring, MonitorMode::TcpPort);
         }
+    }
+
+    /// A hand-edited typo costs only the rule it is in, not the file.
+    #[test]
+    fn an_unreadable_forward_is_skipped_not_fatal() {
+        let host: Host = toml::from_str(
+            "name = \"nas\"\nhostname = \"10.0.0.5\"\n\
+             local_forwards = [\"9443:localhost:9443\", \"94430:localhost\"]\n",
+        )
+        .expect("a bad rule must not fail the host");
+        let specs: Vec<String> = host
+            .local_forwards
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(specs, ["9443:localhost:9443"]);
     }
 
     #[test]

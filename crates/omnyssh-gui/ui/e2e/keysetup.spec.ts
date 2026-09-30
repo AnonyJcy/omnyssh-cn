@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 // the host's hasKey/passwordAuthDisabled so the follow-up `reload_hosts` replays a keyed
 // host — exactly how the real backend drives the panel and refreshes the card.
 const HOSTS = [
-  { name: 'pw-host', hostname: 'pw.example.com', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false }
+  { name: 'pw-host', hostname: 'pw.example.com', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, localForwards: [], tunnelAutostart: false, forwardAgent: false }
 ];
 
 async function boot(page: Page): Promise<void> {

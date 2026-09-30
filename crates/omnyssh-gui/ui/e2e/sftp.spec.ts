@@ -8,13 +8,14 @@ import { expect, test, type Page } from '@playwright/test';
 // the live progress bar is deterministically observable. Both spawn paths (a card's
 // `files`, and the SFTP spawner via the host picker) are load-bearing for the stage.
 const HOSTS = [
-  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: ['prod'], source: 'manual', hasKey: true },
-  { name: 'db-1', hostname: 'db-1.example.com', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false }
+  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: ['prod'], source: 'manual', hasKey: true, localForwards: [], tunnelAutostart: false, forwardAgent: false },
+  { name: 'db-1', hostname: 'db-1.example.com', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, localForwards: [], tunnelAutostart: false, forwardAgent: false }
 ];
 
-async function boot(page: Page): Promise<void> {
+// `windows` swaps in a Windows-shaped local side: a home on C: and a second drive, D:.
+async function boot(page: Page, windows = false): Promise<void> {
   await page.addInitScript(
-    ({ hosts }) => {
+    ({ hosts, windows }) => {
       let cbid = 0;
       const win = window as unknown as Record<string, unknown>;
       const listeners: Record<string, number[]> = {};
@@ -25,12 +26,22 @@ async function boot(page: Page): Promise<void> {
       const completions: Array<() => void> = [];
 
       type Entry = { name: string; path: string; size: number; isDir: boolean };
-      const local: Record<string, Entry[]> = {
-        '/home/user': [
-          { name: 'notes.txt', path: '/home/user/notes.txt', size: 24, isDir: false },
-          { name: 'work', path: '/home/user/work', size: 0, isDir: true }
-        ]
-      };
+      const home = windows ? 'C:\\Users\\me' : '/home/user';
+      const roots = windows ? ['C:\\', 'D:\\', 'E:\\', 'Z:\\'] : ['/'];
+      const local: Record<string, Entry[]> = windows
+        ? {
+            [home]: [{ name: 'notes.txt', path: `${home}\\notes.txt`, size: 24, isDir: false }],
+            'D:\\': [{ name: 'Media', path: 'D:\\Media', size: 0, isDir: true }]
+          }
+        : {
+            [home]: [
+              { name: 'notes.txt', path: '/home/user/notes.txt', size: 24, isDir: false },
+              { name: 'work', path: '/home/user/work', size: 0, isDir: true }
+            ]
+          };
+      // Where each download was sent, for the test to read back.
+      const downloads: string[] = [];
+      (win as { __downloads?: string[] }).__downloads = downloads;
       const remote: Record<string, Entry[]> = {
         '/': [
           { name: 'config.yml', path: '/config.yml', size: 64, isDir: false },
@@ -46,7 +57,7 @@ async function boot(page: Page): Promise<void> {
         return p.slice(p.lastIndexOf('/') + 1);
       }
       function withParent(path: string, entries: Entry[]): Entry[] {
-        if (path === '/') return entries;
+        if (roots.includes(path)) return entries;
         return [{ name: '..', path: parentOf(path), size: 0, isDir: true }, ...entries];
       }
       function addFile(fs: Record<string, Entry[]>, dir: string, name: string): void {
@@ -68,14 +79,22 @@ async function boot(page: Page): Promise<void> {
 
       (win as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
         invoke: (cmd: string, args: Record<string, unknown>) => {
-          if (cmd.startsWith('plugin:path')) return Promise.resolve('/home/user');
+          if (cmd.startsWith('plugin:path')) return Promise.resolve(home);
           switch (cmd) {
             case 'list_hosts':
               return Promise.resolve(hosts);
             case 'reload_hosts':
               return Promise.resolve(null);
+            case 'list_local_roots':
+              return Promise.resolve(roots);
             case 'list_local_dir': {
               const path = args.path as string;
+              if (path === 'E:\\') return Promise.reject({ message: 'The device is not ready. (os error 21)' });
+              // A slow network drive, answering after the user has moved on.
+              if (path === 'Z:\\') {
+                const share = [{ name: 'Share', path: 'Z:\\Share', size: 0, isDir: true }];
+                return new Promise((resolve) => setTimeout(() => resolve(share), 400));
+              }
               return Promise.resolve(withParent(path, local[path] ?? []));
             }
             case 'sftp_open': {
@@ -103,6 +122,7 @@ async function boot(page: Page): Promise<void> {
             }
             case 'sftp_download': {
               const { sessionId, local: dest } = args as { sessionId: number; local: string };
+              downloads.push(dest);
               const tid = ++nextTransfer;
               setTimeout(() => fireEvent('transfer-progress', { sessionId, transferId: tid, done: 2, total: 8 }), 0);
               completions.push(() => {
@@ -132,7 +152,7 @@ async function boot(page: Page): Promise<void> {
         }
       };
     },
-    { hosts: HOSTS }
+    { hosts: HOSTS, windows }
   );
 
   await page.goto('/');
@@ -218,4 +238,69 @@ test('action-first: the SFTP spawner opens the host picker, then a live session'
 
   await expect(page.getByRole('button', { name: 'web-1 · sftp', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'web-1' }).getByText('config.yml')).toBeVisible();
+});
+
+test('Windows: the local pane switches drives, and downloads land on the chosen one', async ({
+  page
+}) => {
+  await boot(page, true);
+  await page.getByTitle('files on web-1').click();
+
+  const localPane = page.getByRole('region', { name: 'Local' });
+  const remotePane = page.getByRole('region', { name: 'web-1' });
+  await expect(localPane.getByText('notes.txt')).toBeVisible();
+  const drive = localPane.getByRole('combobox', { name: 'Local drive' });
+  await expect(drive).toHaveValue('C:\\');
+
+  await drive.selectOption('D:\\');
+  await expect(localPane.getByText('Media')).toBeVisible();
+  await expect(drive).toHaveValue('D:\\');
+
+  await remotePane.getByRole('checkbox', { name: 'Mark config.yml' }).click();
+  await page.getByRole('button', { name: 'Download' }).click();
+  await expect(page.getByLabel('transfer progress')).toBeVisible();
+  const downloads = await page.evaluate(() => (window as unknown as { __downloads: string[] }).__downloads);
+  expect(downloads).toEqual(['D:\\config.yml']);
+});
+
+test('Windows: a drive that fails to list says why, and the selector stays on the pane’s drive', async ({
+  page
+}) => {
+  await boot(page, true);
+  await page.getByTitle('files on web-1').click();
+  const localPane = page.getByRole('region', { name: 'Local' });
+  const drive = localPane.getByRole('combobox', { name: 'Local drive' });
+  await expect(drive).toHaveValue('C:\\');
+
+  await drive.selectOption('E:\\');
+  await expect(localPane.getByText('The device is not ready')).toBeVisible();
+  await expect(drive).toHaveValue('C:\\');
+
+  // Another drive still opens.
+  await drive.selectOption('D:\\');
+  await expect(localPane.getByText('Media')).toBeVisible();
+});
+
+test('a single-root system shows no drive switch', async ({ page }) => {
+  await boot(page);
+  await page.getByTitle('files on web-1').click();
+  const localPane = page.getByRole('region', { name: 'Local' });
+  await expect(localPane.getByText('notes.txt')).toBeVisible();
+  await expect(localPane.getByRole('combobox', { name: 'Local drive' })).toHaveCount(0);
+});
+
+test('Windows: a slow drive left for another does not take the pane back', async ({ page }) => {
+  await boot(page, true);
+  await page.getByTitle('files on web-1').click();
+  const localPane = page.getByRole('region', { name: 'Local' });
+  const drive = localPane.getByRole('combobox', { name: 'Local drive' });
+  await expect(localPane.getByText('notes.txt')).toBeVisible();
+
+  await drive.selectOption('Z:\\');
+  await drive.selectOption('D:\\');
+  await expect(localPane.getByText('Media')).toBeVisible();
+  await page.waitForTimeout(600);
+  await expect(localPane.getByText('Media')).toBeVisible();
+  await expect(localPane.getByText('Share')).toHaveCount(0);
+  await expect(drive).toHaveValue('D:\\');
 });

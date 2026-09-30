@@ -5,14 +5,17 @@ import { hosts } from '$lib/stores/hosts';
 import { statuses } from '$lib/stores/statuses';
 import { metrics } from '$lib/stores/metrics';
 import { services } from '$lib/stores/services';
+import { tunnels } from '$lib/stores/tunnels';
 import { snippetRun, beginRun, clearRun } from '$lib/stores/snippets';
 import { sessions } from '$lib/stores/sessions';
 import { lastError } from '$lib/stores/notifications';
 import { keySetup, dismissKeySetup, beginKeySetup } from '$lib/stores/keySetup';
+import { passphrasePrompt, passphraseQueue } from '$lib/stores/passphrase';
 import {
   applyError,
   applyHostStatusChanged,
   applyHostsLoaded,
+  applyKeyPassphraseRequired,
   applyKeySetupComplete,
   applyKeySetupFailed,
   applyKeySetupProgress,
@@ -22,6 +25,7 @@ import {
   applyServicesFailed,
   applySnippetResult,
   applyTerminalExited,
+  applyTunnelStatusChanged,
   terminalDidExit
 } from './router';
 
@@ -31,7 +35,9 @@ describe('ipc event router', () => {
     statuses.set(new Map());
     metrics.set(new Map());
     services.set(new Map());
+    tunnels.set(new Map());
     lastError.set(null);
+    passphraseQueue.set([]);
   });
 
   it('routes a hosts-loaded payload into the hosts store', () => {
@@ -44,7 +50,10 @@ describe('ipc event router', () => {
         tags: [],
         source: 'manual',
         hasKey: false,
-        monitoring: 'ssh'
+        monitoring: 'ssh',
+        localForwards: [],
+        tunnelAutostart: false,
+        forwardAgent: false
       }
     ];
 
@@ -111,7 +120,7 @@ describe('ipc event router', () => {
     applyServicesDetected({ hostName: 'web-2', services: [{ kind: 'docker', metrics: [] }] });
 
     applyHostsLoaded([
-      { name: 'web-1', hostname: '10.0.0.1', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, monitoring: 'ssh' }
+      { name: 'web-1', hostname: '10.0.0.1', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, monitoring: 'ssh', localForwards: [], tunnelAutostart: false, forwardAgent: false }
     ]);
 
     expect(get(statuses).has('web-2')).toBe(false);
@@ -156,21 +165,44 @@ describe('ipc event router', () => {
     clearRun();
   });
 
-  it('terminal-exited closes the tab matched by backend id', () => {
+  it('terminal-exited without output closes the tab matched by backend id', () => {
     const tab = sessions.spawn('terminal', 'web-1');
     sessions.setTermId(tab.id, 501);
 
-    applyTerminalExited(501);
+    applyTerminalExited(501, false);
 
     expect(get(sessions).some((s) => s.id === tab.id)).toBe(false);
   });
 
+  it('terminal-exited after output keeps the tab, marked closed', () => {
+    const tab = sessions.spawn('terminal', 'web-1');
+    const other = sessions.spawn('terminal', 'db-1');
+    sessions.setTermId(tab.id, 502);
+    sessions.setTermId(other.id, 503);
+    sessions.setStatus(tab.id, 'connected');
+    sessions.setStatus(other.id, 'connected');
+
+    applyTerminalExited(502, true);
+
+    const list = get(sessions);
+    expect(list.find((s) => s.id === tab.id)?.status).toBe('closed');
+    expect(list.find((s) => s.id === other.id)?.status).toBe('connected');
+    sessions.close(tab.id);
+    sessions.close(other.id);
+  });
+
   it('a terminal-exited that races ahead of terminalOpen reconciles on setTermId', () => {
-    // The exit fires before any tab recorded termId 777, so it is parked...
-    applyTerminalExited(777);
-    // ...then the tab records its id and learns it already exited (consumed once).
-    expect(terminalDidExit(777)).toBe(true);
+    // The exit fires before any tab recorded termId 777, so it is parked with its
+    // hadOutput...
+    applyTerminalExited(777, false);
+    applyTerminalExited(778, true);
+    // ...then the tab records its id and learns how it exited (consumed once).
     expect(terminalDidExit(777)).toBe(false);
+    expect(terminalDidExit(777)).toBeUndefined();
+    expect(terminalDidExit(778)).toBe(true);
+    expect(terminalDidExit(778)).toBeUndefined();
+    // A session that is still running has nothing parked.
+    expect(terminalDidExit(779)).toBeUndefined();
   });
 
   it('routes key-setup progress into the active run, then a terminal outcome', () => {
@@ -200,5 +232,34 @@ describe('ipc event router', () => {
     applyKeySetupRollback({ hostName: 'db-1', result: 'Restored.' });
     expect(get(keySetup)).toEqual({ hostName: 'db-1', phase: { kind: 'rolledBack', result: 'Restored.' } });
     dismissKeySetup();
+  });
+
+  it('queues key-passphrase-required prompts, one per key', () => {
+    applyKeyPassphraseRequired({ hostName: 'web-1', keyPath: '/home/me/.ssh/id_ed25519' });
+    applyKeyPassphraseRequired({ hostName: 'db-1', keyPath: '/home/me/.ssh/other' });
+    applyKeyPassphraseRequired({ hostName: 'web-2', keyPath: '/home/me/.ssh/id_ed25519' });
+
+    expect(get(passphrasePrompt)).toEqual({ hostName: 'web-1', keyPath: '/home/me/.ssh/id_ed25519' });
+    expect(get(passphraseQueue).map((p) => p.keyPath)).toEqual([
+      '/home/me/.ssh/id_ed25519',
+      '/home/me/.ssh/other'
+    ]);
+  });
+
+  it('keeps each host\'s latest tunnel status and forgets a stopped one', () => {
+    applyTunnelStatusChanged({ hostName: 'nas', status: { kind: 'connecting' } });
+    applyTunnelStatusChanged({ hostName: 'nas', status: { kind: 'up' } });
+    applyTunnelStatusChanged({ hostName: 'db', status: { kind: 'retrying', message: 'connection lost' } });
+    expect(get(tunnels).get('nas')).toEqual({ kind: 'up' });
+    expect(get(tunnels).get('db')).toEqual({ kind: 'retrying', message: 'connection lost' });
+
+    applyTunnelStatusChanged({ hostName: 'nas', status: { kind: 'stopped' } });
+    expect(get(tunnels).has('nas')).toBe(false);
+  });
+
+  it('drops the tunnel status of a host that is gone', () => {
+    applyTunnelStatusChanged({ hostName: 'old', status: { kind: 'failed', message: 'x' } });
+    applyHostsLoaded([]);
+    expect(get(tunnels).has('old')).toBe(false);
   });
 });

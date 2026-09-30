@@ -7,8 +7,8 @@ import { expect, test, type Page } from '@playwright/test';
 // on Enter (proving input round-trips). The host-first path (a Dashboard card's `sh`,
 // no picker) is the load-bearing flow the stage requires.
 const HOSTS = [
-  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: ['prod'], source: 'manual', hasKey: true },
-  { name: 'db-1', hostname: 'db-1.example.com', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false }
+  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: ['prod'], source: 'manual', hasKey: true, localForwards: [], tunnelAutostart: false, forwardAgent: false },
+  { name: 'db-1', hostname: 'db-1.example.com', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, localForwards: [], tunnelAutostart: false, forwardAgent: false }
 ];
 
 async function boot(page: Page): Promise<void> {
@@ -38,9 +38,16 @@ async function boot(page: Page): Promise<void> {
         }
       }
       // Lets a test simulate the remote shell exiting for a given backend session id.
-      (win as { __fireTerminalExited?: (sessionId: number) => void }).__fireTerminalExited = (
-        sessionId
-      ) => fireEvent('terminal-exited', { sessionId });
+      win.__fireTerminalExited = (sessionId: number, hadOutput: boolean) =>
+        fireEvent('terminal-exited', { sessionId, hadOutput });
+      // ...and output the backend streams to it (the end line, a late chunk); `false`
+      // while the session is not open yet.
+      win.__sendOutput = (sessionId: number, text: string) => {
+        const chId = sessionChannel[sessionId];
+        if (chId == null) return false;
+        sendToChannel(chId, text);
+        return true;
+      };
 
       (win as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
         invoke: (cmd: string, args: Record<string, unknown>) => {
@@ -54,11 +61,13 @@ async function boot(page: Page): Promise<void> {
               const sid = ++nextSession;
               sessionChannel[sid] = chId;
               // A shell prompt proves the streamed output renders + flips status to connected.
-              setTimeout(() => sendToChannel(chId, 'omnyssh-ready> '), 0);
+              if (!win.__silent) setTimeout(() => sendToChannel(chId, 'omnyssh-ready> '), 0);
               return Promise.resolve(sid);
             }
             case 'terminal_write': {
               const { sessionId, data } = args as { sessionId: number; data: number[] };
+              // Every byte the shell would get, for tests that assert what a key sent.
+              ((win.__writes ??= []) as number[][]).push(data);
               const chId = sessionChannel[sessionId];
               // Echo a canned result once Enter (\r == 13) arrives, so output is assertable.
               if (chId != null && data.includes(13)) {
@@ -66,7 +75,12 @@ async function boot(page: Page): Promise<void> {
               }
               return Promise.resolve(null);
             }
+            case 'terminal_paste':
+              win.__pasted = ((win.__pasted as number | undefined) ?? 0) + 1;
+              return Promise.resolve(null);
             case 'terminal_resize':
+              win.__resizes = ((win.__resizes as number | undefined) ?? 0) + 1;
+              return Promise.resolve(null);
             case 'terminal_close':
               return Promise.resolve(null);
             case 'plugin:event|listen': {
@@ -157,17 +171,212 @@ test('toggling the theme re-themes a live terminal (§5.1)', async ({ page }) =>
   await expect.poll(paintedBg).toBe('rgb(255, 255, 255)');
 });
 
-test('a remote exit (terminal-exited) tears the tab down', async ({ page }) => {
+type ExitStub = {
+  __fireTerminalExited: (id: number, hadOutput: boolean) => void;
+  __sendOutput: (id: number, text: string) => boolean;
+  __resizes?: number;
+};
+
+const fireExited = (page: Page, id: number, hadOutput: boolean) =>
+  page.evaluate(([id, hadOutput]) => {
+    (window as unknown as ExitStub).__fireTerminalExited(id, hadOutput);
+  }, [id, hadOutput] as const);
+const sendOutput = (page: Page, id: number, text: string) =>
+  page.evaluate(
+    ([id, text]) => (window as unknown as ExitStub).__sendOutput(id, text),
+    [id, text] as const
+  );
+const resizes = (page: Page) =>
+  page.evaluate(() => (window as unknown as ExitStub).__resizes ?? 0);
+const terminalTab = (page: Page) =>
+  page.getByRole('button', { name: 'web-1 · terminal', exact: true });
+
+// What the backend writes under a session's last output when it ends.
+const END_LINE =
+  '\r\n\x1b[2m[Connection closed. Press Enter to close this tab.]\x1b[0m\x1b[?25l\x1b[?9;1000;1002;1003l';
+
+test('a remote exit before any output (terminal-exited) tears the tab down', async ({ page }) => {
   await boot(page);
   await page.getByTitle('sh on web-1').click();
-  await expect(page.getByRole('button', { name: 'web-1 · terminal', exact: true })).toBeVisible();
+  await expect(terminalTab(page)).toBeVisible();
   await expect(page.locator('.xterm')).toBeVisible();
 
-  // The remote shell exits: the backend emits terminal-exited for session id 1.
-  await page.evaluate(() => {
-    (window as unknown as { __fireTerminalExited: (id: number) => void }).__fireTerminalExited(1);
+  // The connection failed: the backend emits terminal-exited for session id 1, no output.
+  await fireExited(page, 1, false);
+
+  await expect(terminalTab(page)).toHaveCount(0);
+  await expect(page.locator('.xterm')).toHaveCount(0);
+});
+
+// A server that refuses the shell says why, then ends the session. The tab
+// keeps that message on screen until the user closes it.
+test('a remote exit after output keeps the tab, takes no input, and Enter closes it', async ({
+  page
+}) => {
+  await bootWithClipboard(page);
+  // The session also left mouse reporting on, as htop or tmux would when cut off.
+  await sendOutput(page, 1, '\x1b[?1000h\r\nPermission denied, please try again.');
+  await sendOutput(page, 1, END_LINE);
+  await fireExited(page, 1, true);
+
+  await expect(page.locator('.xterm-rows')).toContainText('Permission denied, please try again.');
+  await expect(page.locator('.xterm-rows')).toContainText('Press Enter to close this tab.');
+  await expect(terminalTab(page).locator('[role="img"]')).toHaveAttribute('aria-label', 'off');
+
+  // Nothing reaches the ended session: keys, ^C, a paste, or a resize.
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.type('ls');
+  await page.keyboard.press('Control+C');
+  await page.locator('.xterm-helper-textarea').evaluate((el) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/plain', 'uptime');
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+  });
+  const before = await resizes(page);
+  await page.setViewportSize({ width: 900, height: 640 });
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+  );
+  expect(await resizes(page)).toBe(before);
+  expect(await writes(page)).toEqual([]);
+
+  // What the screen shows can still be copied.
+  await selectPrompt(page);
+  await page.keyboard.press('Control+Shift+C');
+  await expect.poll(() => copied(page)).toEqual(['omnyssh-ready>']);
+
+  // Tab keeps the keyboard on the terminal, so Enter still closes the tab.
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+
+  await page.keyboard.press('Enter');
+  await expect(terminalTab(page)).toHaveCount(0);
+  await expect(page.locator('.xterm')).toHaveCount(0);
+  expect(await writes(page)).toEqual([]);
+});
+
+// A large chunk crosses the IPC asynchronously, so the first output can land after the
+// exit event: it still renders, and does not bring the tab back to life.
+test('output arriving after the exit renders without reviving the tab; Esc closes it', async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __silent: boolean }).__silent = true;
+  });
+  await boot(page);
+  await page.getByTitle('sh on web-1').click();
+  await expect(terminalTab(page)).toBeVisible();
+
+  await fireExited(page, 1, true);
+  await expect.poll(() => sendOutput(page, 1, 'Permission denied, please try again.')).toBe(true);
+
+  await expect(page.locator('.xterm-rows')).toContainText('Permission denied, please try again.');
+  await expect(terminalTab(page).locator('[role="img"]')).toHaveAttribute('aria-label', 'off');
+
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Escape');
+  await expect(terminalTab(page)).toHaveCount(0);
+  expect(await writes(page)).toEqual([]);
+});
+
+// Windows and Linux copy with Ctrl+Shift+C. The Desktop Chrome device reports a Windows
+// user agent, so this is the path those platforms take; the clipboard is stubbed at the
+// boundary like the IPC, which also keeps parallel runs apart.
+async function bootWithClipboard(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const win = window as unknown as { __copied: string[] };
+    win.__copied = [];
+    navigator.clipboard.writeText = (text: string) => {
+      win.__copied.push(text);
+      return Promise.resolve();
+    };
+  });
+  await boot(page);
+  await page.getByTitle('sh on web-1').click();
+  await expect(page.locator('.xterm-rows')).toContainText('omnyssh-ready');
+}
+
+const copied = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __copied: string[] }).__copied);
+const writes = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __writes?: number[][] }).__writes ?? []);
+
+/** Double-clicks the first word of the first row, as a user selects it. */
+async function selectPrompt(page: Page): Promise<void> {
+  const row = (await page.locator('.xterm-rows > div').first().boundingBox())!;
+  await page.mouse.dblclick(row.x + 20, row.y + row.height / 2);
+}
+
+test('Ctrl+Shift+C copies the selection and sends the shell nothing', async ({ page }) => {
+  await bootWithClipboard(page);
+  await selectPrompt(page);
+
+  await page.keyboard.press('Control+Shift+C');
+  await expect.poll(() => copied(page)).toEqual(['omnyssh-ready>']);
+  expect(await writes(page)).toEqual([]);
+
+  // Bare Ctrl+C stays the interrupt, selection or not.
+  await page.keyboard.press('Control+C');
+  await expect.poll(() => writes(page)).toEqual([[3]]);
+  expect(await copied(page)).toEqual(['omnyssh-ready>']);
+
+  // Ctrl+Shift+V is the webview's own paste; xterm must not turn it into ^V or a V.
+  await page.keyboard.press('Control+Shift+V');
+  expect(await writes(page)).toEqual([[3]]);
+});
+
+test('Ctrl+Shift+C with nothing selected copies nothing', async ({ page }) => {
+  await bootWithClipboard(page);
+  await page.locator('.xterm-helper-textarea').focus();
+
+  await page.keyboard.press('Control+Shift+C');
+  expect(await copied(page)).toEqual([]);
+  expect(await writes(page)).toEqual([]);
+});
+
+// WebKitGTK under a Russian layout reports keyCode 0 for letter keys, which is also
+// what a synthetic keydown carries unless told otherwise — so this is the key event
+// xterm gets there: without the fallback, Ctrl+C would send nothing at all.
+test('under a non-Latin layout Ctrl+C still interrupts and Ctrl+Shift+V still pastes', async ({
+  page
+}) => {
+  await bootWithClipboard(page);
+  const press = (code: string, shiftKey: boolean, keyCode = 0) =>
+    page.locator('.xterm-helper-textarea').evaluate(
+      (el, init) => {
+        el.dispatchEvent(new KeyboardEvent('keydown', { ...init, ctrlKey: true, bubbles: true }));
+      },
+      { key: '\u0441', code, shiftKey, keyCode }
+    );
+
+  await press('KeyC', false);
+  await expect.poll(() => writes(page)).toEqual([[3]]);
+
+  // Where the webview does report the key (WebView2 under the same layout), xterm
+  // sends ^C itself and the fallback stays out: one ^C, not two.
+  await press('KeyC', false, 67);
+  await expect.poll(() => writes(page)).toEqual([[3], [3]]);
+
+  await press('KeyV', true);
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __pasted?: number }).__pasted))
+    .toBe(1);
+  expect(await writes(page)).toEqual([[3], [3]]);
+});
+
+test.describe('on macOS', () => {
+  test.use({
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)'
   });
 
-  await expect(page.getByRole('button', { name: 'web-1 · terminal', exact: true })).toHaveCount(0);
-  await expect(page.locator('.xterm')).toHaveCount(0);
+  test('Ctrl+Shift+C is left alone — Cmd+C copies there', async ({ page }) => {
+    await bootWithClipboard(page);
+    await selectPrompt(page);
+
+    await page.keyboard.press('Control+Shift+C');
+    expect(await copied(page)).toEqual([]);
+  });
 });

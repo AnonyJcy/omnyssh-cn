@@ -21,6 +21,7 @@ vi.mock('$lib/bindings', () => {
       metricsUpdated: channel('metricsUpdated'),
       servicesDetected: channel('servicesDetected'),
       servicesFailed: channel('servicesFailed'),
+      tunnelStatusChanged: channel('tunnelStatusChanged'),
       snippetResult: channel('snippetResult'),
       terminalExited: channel('terminalExited'),
       sftpConnected: channel('sftpConnected'),
@@ -34,6 +35,8 @@ vi.mock('$lib/bindings', () => {
       keySetupFailed: channel('keySetupFailed'),
       keySetupRollback: channel('keySetupRollback'),
       updateAvailable: channel('updateAvailable'),
+      keyPassphraseRequired: channel('keyPassphraseRequired'),
+      passwordRequired: channel('passwordRequired'),
       error: channel('error')
     }
   };
@@ -47,6 +50,8 @@ import { snippetRun, beginRun, clearRun } from '$lib/stores/snippets';
 import { sessions } from '$lib/stores/sessions';
 import { sftp } from '$lib/stores/sftp';
 import { lastError } from '$lib/stores/notifications';
+import { passphrasePrompt, passphraseQueue } from '$lib/stores/passphrase';
+import { passwordPrompt, passwordQueue } from '$lib/stores/password';
 import { startEventBridge } from './subscribe';
 
 describe('startEventBridge', () => {
@@ -56,6 +61,8 @@ describe('startEventBridge', () => {
     metrics.set(new Map());
     services.set(new Map());
     lastError.set(null);
+    passphraseQueue.set([]);
+    passwordQueue.set([]);
     clearRun();
   });
 
@@ -79,6 +86,7 @@ describe('startEventBridge', () => {
       payload: { hostName: 'web-1', snippetName: 'deploy', ok: true, output: 'done' }
     });
     listeners.error({ payload: { message: 'nope' } });
+    listeners.keyPassphraseRequired({ payload: { hostName: 'web-1', keyPath: '/k/id_ed25519' } });
 
     expect(get(hosts)).toHaveLength(1);
     expect(get(statuses).get('web-1')).toEqual({ kind: 'connected' });
@@ -86,6 +94,17 @@ describe('startEventBridge', () => {
     expect(get(services).get('web-1')).toEqual({ kind: 'detected', services: [{ kind: 'redis', metrics: [] }] });
     expect(get(snippetRun)?.entries[0]).toEqual({ hostName: 'web-1', pending: false, ok: true, output: 'done' });
     expect(get(lastError)).toBe('nope');
+    expect(get(passphrasePrompt)).toEqual({ hostName: 'web-1', keyPath: '/k/id_ed25519' });
+  });
+
+  it('queues password prompts in order', async () => {
+    await startEventBridge();
+    const first = { requestId: 7, hostName: 'nas', login: 'admin@10.0.0.5', retry: false, newHostKey: null };
+    const second = { ...first, requestId: 8, hostName: 'db' };
+    listeners.passwordRequired({ payload: first });
+    listeners.passwordRequired({ payload: second });
+    expect(get(passwordPrompt)).toEqual(first);
+    expect(get(passwordQueue)).toEqual([first, second]);
   });
 
   it('terminal-exited closes the tab whose backend id matches', async () => {
@@ -93,9 +112,20 @@ describe('startEventBridge', () => {
     const tab = sessions.spawn('terminal', 'web-1');
     sessions.setTermId(tab.id, 42); // the backend public id the event carries
 
-    listeners.terminalExited({ payload: { sessionId: 42 } });
+    listeners.terminalExited({ payload: { sessionId: 42, hadOutput: false } });
 
     expect(get(sessions).some((s) => s.id === tab.id)).toBe(false);
+  });
+
+  it('terminal-exited passes hadOutput on: a tab that showed output stays, closed', async () => {
+    await startEventBridge();
+    const tab = sessions.spawn('terminal', 'web-1');
+    sessions.setTermId(tab.id, 43);
+
+    listeners.terminalExited({ payload: { sessionId: 43, hadOutput: true } });
+
+    expect(get(sessions).find((s) => s.id === tab.id)?.status).toBe('closed');
+    sessions.close(tab.id);
   });
 
   it('routes sftp events into the matching session by its backend id (§3.4)', async () => {

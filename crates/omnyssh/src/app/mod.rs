@@ -27,6 +27,7 @@ use omnyssh_core::ssh::client::{ConnectionStatus, Host};
 use omnyssh_core::ssh::pool::PollManager;
 use omnyssh_core::ssh::pty::PtyManager;
 use omnyssh_core::ssh::sftp::{SftpCommand, SftpManager};
+use omnyssh_core::ssh::tunnel::{TunnelManager, TunnelStatus};
 
 mod action;
 mod actions;
@@ -121,6 +122,9 @@ pub struct AppState {
     pub snippets: Vec<Snippet>,
     /// Detected services per host.
     pub services: HashMap<String, Vec<omnyssh_core::event::DetectedService>>,
+    /// Status of each host's tunnel, keyed by `host.name`. No entry means none
+    /// is running.
+    pub tunnel_statuses: HashMap<String, TunnelStatus>,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +155,10 @@ pub struct ViewState {
     pub tick_count: u64,
     /// Startup update-notification popup, shown when a newer release exists.
     pub update_popup: Option<UpdatePopup>,
+    /// Encrypted keys waiting for a passphrase, one per key; the first is shown.
+    pub passphrase_prompts: Vec<PassphrasePrompt>,
+    /// Logins waiting for a password, oldest first; the first is shown.
+    pub password_prompts: Vec<PasswordPrompt>,
 }
 
 impl ViewState {
@@ -169,6 +177,8 @@ impl ViewState {
             keybindings: ParsedKeybindings::default(),
             tick_count: 0,
             update_popup: None,
+            passphrase_prompts: Vec::new(),
+            password_prompts: Vec::new(),
         }
     }
 }
@@ -177,6 +187,29 @@ impl Default for ViewState {
     fn default() -> Self {
         Self::default_inner()
     }
+}
+
+/// In-memory prompt for an encrypted SSH identity file.
+pub struct PassphrasePrompt {
+    pub host_name: String,
+    pub key_path: String,
+    pub field: FormField,
+    pub error: Option<String>,
+    /// Set while the key is being decrypted; input is ignored meanwhile.
+    pub unlocking: bool,
+}
+
+/// In-memory prompt for the login password a connection waits on.
+pub struct PasswordPrompt {
+    pub request_id: u64,
+    pub host_name: String,
+    /// `user@host`, as the server is asked.
+    pub login: String,
+    /// The previous password for this login was refused.
+    pub retry: bool,
+    /// Fingerprint of a host key first seen on this connection.
+    pub new_host_key: Option<String>,
+    pub field: FormField,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +242,11 @@ pub struct App {
     poll_manager: Option<PollManager>,
     /// PTY session manager for the Terminal multi-session screen.
     pty_manager: Option<PtyManager>,
+    /// Runs the hosts' port-forwarding tunnels. Taken on quit to stop them.
+    tunnel_manager: Option<TunnelManager>,
+    /// Set by the first `HostsLoaded`: autostart belongs to launch, not to a
+    /// reload.
+    hosts_loaded: bool,
     /// One heavyweight event (Key, etc.) that was pulled from the channel
     /// during a lightweight-event drain but could not be handled inline.
     /// Consumed at the top of the next main-loop iteration before blocking
@@ -228,6 +266,7 @@ impl App {
         let (core_tx, core_rx) = mpsc::channel(256);
         let theme = Theme::from_name(&config.ui.theme);
         let keybindings = ParsedKeybindings::from_config(&config.keybindings);
+        let tunnel_manager = TunnelManager::new(core_tx.clone());
         Self {
             state: Arc::new(RwLock::new(AppState::default())),
             view: ViewState {
@@ -243,6 +282,8 @@ impl App {
             next_transfer_id: 0,
             poll_manager: None,
             pty_manager: None,
+            tunnel_manager: Some(tunnel_manager),
+            hosts_loaded: false,
             pending_event: None,
             config,
         }
@@ -342,6 +383,10 @@ impl App {
         if let Some(mgr) = self.pty_manager.take() {
             mgr.shutdown();
         }
+        // Stop every tunnel, releasing its local ports.
+        if let Some(mgr) = self.tunnel_manager.take() {
+            mgr.shutdown();
+        }
 
         // Terminal restore — always runs even if main_loop returned Err.
         // Each step runs unconditionally so a failure in one does not prevent
@@ -431,6 +476,17 @@ impl App {
                     };
                     if on_terminal {
                         self.handle_term_paste(&text);
+                    } else if let Some(prompt) = self.view.passphrase_prompts.first_mut() {
+                        // Typed in, never submitted by a trailing newline.
+                        if !prompt.unlocking {
+                            text.chars()
+                                .filter(|c| !matches!(c, '\r' | '\n'))
+                                .for_each(|c| prompt.field.insert_char(c));
+                        }
+                    } else if let Some(prompt) = self.view.password_prompts.first_mut() {
+                        text.chars()
+                            .filter(|c| !matches!(c, '\r' | '\n'))
+                            .for_each(|c| prompt.field.insert_char(c));
                     } else {
                         for key in crate::utils::paste::paste_to_keys(&text) {
                             let action = self.handle_key(key).await?;
@@ -480,6 +536,9 @@ impl App {
                 }
 
                 AppEvent::Core(event) => self.handle_core_event(event).await?,
+                AppEvent::PassphraseUnlocked { key_path, result } => {
+                    self.finish_unlock(key_path, result);
+                }
             }
 
             // ----------------------------------------------------------------
@@ -585,6 +644,12 @@ impl App {
                         Duration::from_secs(30),
                     ));
                 }
+                // A reload only brings running tunnels in line with the new list.
+                if std::mem::replace(&mut self.hosts_loaded, true) {
+                    self.sync_tunnels().await;
+                } else if let Some(tunnels) = &mut self.tunnel_manager {
+                    tunnels.autostart(&self.state.read().await.hosts);
+                }
                 tracing::info!("Loaded {} host(s)", n);
             }
 
@@ -677,6 +742,25 @@ impl App {
                 ));
             }
 
+            CoreEvent::TunnelStatusChanged(host_name, status) => {
+                match &status {
+                    TunnelStatus::Up => {
+                        self.view.status_message = Some(format!("Tunnel for '{host_name}' is up"));
+                    }
+                    TunnelStatus::Failed(reason) => {
+                        self.view.status_message =
+                            Some(format!("Tunnel for '{host_name}' failed: {reason}"));
+                    }
+                    _ => {}
+                }
+                let mut state = self.state.write().await;
+                if status == TunnelStatus::Stopped {
+                    state.tunnel_statuses.remove(&host_name);
+                } else {
+                    state.tunnel_statuses.insert(host_name, status);
+                }
+            }
+
             // ----------------------------------------------------------------
             // Auto SSH Key Setup events
             // ----------------------------------------------------------------
@@ -718,6 +802,9 @@ impl App {
                         tracing::warn!("Failed to save hosts after key setup: {}", e);
                     }
                 }
+                // The server now refuses the password a running tunnel would
+                // redial with.
+                self.sync_tunnels().await;
 
                 // Close popup and show success.
                 self.view.host_list.popup = None;
@@ -744,6 +831,56 @@ impl App {
                     "⚠ Key setup rolled back for '{}': {}",
                     host_name, result
                 ));
+            }
+
+            CoreEvent::KeyPassphraseRequired {
+                host_name,
+                key_path,
+            } => {
+                // The terminal screen keeps its keys; the prompt waits until the
+                // user leaves it. Said on every ask, as other messages replace it.
+                if self.state.read().await.screen == Screen::Terminal {
+                    self.view.status_message = Some(format!(
+                        "SSH key needs a passphrase — Ctrl+Q to enter it: {key_path}"
+                    ));
+                }
+                // One prompt per key: a single unlock serves every host using it.
+                if !self
+                    .view
+                    .passphrase_prompts
+                    .iter()
+                    .any(|p| p.key_path == key_path)
+                {
+                    self.view.passphrase_prompts.push(PassphrasePrompt {
+                        host_name,
+                        key_path,
+                        field: FormField::default(),
+                        error: None,
+                        unlocking: false,
+                    });
+                }
+            }
+
+            CoreEvent::PasswordRequired {
+                request_id,
+                host_name,
+                login,
+                retry,
+                new_host_key,
+            } => {
+                // As with a passphrase, the terminal screen keeps its keys.
+                if self.state.read().await.screen == Screen::Terminal {
+                    self.view.status_message =
+                        Some(format!("{login} needs a password — Ctrl+Q to enter it"));
+                }
+                self.view.password_prompts.push(PasswordPrompt {
+                    request_id,
+                    host_name,
+                    login,
+                    retry,
+                    new_host_key,
+                    field: FormField::default(),
+                });
             }
 
             // ----------------------------------------------------------------
@@ -784,36 +921,31 @@ impl App {
                 // thread. Mark the tab as having unread activity if it is not
                 // the currently focused tab.
                 let active_id = self.view.terminal_view.active_session_id();
-                if active_id != Some(session_id) {
-                    if let Some(tab) = self
-                        .view
-                        .terminal_view
-                        .tabs
-                        .iter_mut()
-                        .find(|t| t.session_id == session_id)
-                    {
+                if let Some(tab) = self
+                    .view
+                    .terminal_view
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.session_id == session_id)
+                {
+                    tab.saw_output = true;
+                    if active_id != Some(session_id) {
                         tab.has_activity = true;
                     }
                 }
             }
 
             CoreEvent::PtyExited(session_id) => {
-                // Remove the session from the manager and the tab bar.
+                // Remove the session from the manager.
                 if let Some(mgr) = &mut self.pty_manager {
                     mgr.close(session_id);
                 }
-                let tv = &mut self.view.terminal_view;
-                // Remove the tab.
-                if let Some(pos) = tv.tabs.iter().position(|t| t.session_id == session_id) {
-                    tv.tabs.remove(pos);
-                    // Collapse any split that referenced this tab.
-                    tv.split = None;
-                    tv.split_focus = SplitFocus::Primary;
-                    if tv.tabs.is_empty() {
-                        self.state.write().await.screen = Screen::Dashboard;
-                        self.view.status_message = Some("SSH session closed.".to_string());
-                    } else {
-                        tv.active_tab = tv.active_tab.min(tv.tabs.len().saturating_sub(1));
+                let tabs = &mut self.view.terminal_view.tabs;
+                // A tab that showed anything stays, ended, so the server's last words
+                // can be read; a blank one (a failed connect) goes now.
+                if let Some(pos) = tabs.iter().position(|t| t.session_id == session_id) {
+                    if !tabs[pos].end() {
+                        self.remove_ended_tab(pos).await;
                     }
                 }
             }

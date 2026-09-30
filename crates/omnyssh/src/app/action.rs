@@ -41,6 +41,16 @@ pub enum AppAction {
     ConfirmKeySetup(usize),
     /// User cancelled the key setup prompt.
     CancelKeySetup,
+    /// Start or stop the selected host's port-forwarding tunnel.
+    ToggleTunnel,
+    /// Submit the passphrase entered for an encrypted identity file.
+    SubmitPassphrase,
+    /// Dismiss the passphrase prompt without unlocking the key.
+    DismissPassphrase,
+    /// Send the password typed for the login a connection waits on.
+    SubmitPassword,
+    /// Cancel that login.
+    DismissPassword,
 
     // -----------------------------------------------------------------------
     // Detail View actions
@@ -104,6 +114,8 @@ pub enum AppAction {
     FmEnterDir,
     /// Navigate to the parent directory (Backspace).
     FmParentDir,
+    /// Move the local panel to the next drive (d; Windows has one per letter).
+    FmNextDrive,
     /// Toggle the marked state of the entry under the cursor (Space).
     FmMarkFile,
     /// Open the host-picker popup to connect the remote panel (H).
@@ -146,6 +158,8 @@ pub enum AppAction {
     TermCloseHostPicker,
     /// Close the active terminal tab (Ctrl+W).
     TermCloseTab,
+    /// Close the focused tab once its session has ended (Enter or Esc).
+    TermCloseEnded,
     /// Switch to the tab at the given 0-based index (Ctrl+1..9).
     TermSwitchTab(usize),
     /// Toggle vertical split-view between primary and the next tab (Ctrl+\).

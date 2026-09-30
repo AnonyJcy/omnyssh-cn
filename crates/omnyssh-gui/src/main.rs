@@ -12,15 +12,21 @@ mod dto;
 mod error;
 mod events;
 mod state;
+mod tray;
 
+use commands::auth::{answer_password, unlock_identity};
 use commands::hosts::{delete_host, list_hosts, refresh_metrics, reload_hosts, save_host};
 use commands::keysetup::{restore_password_auth, start_key_setup};
 use commands::sftp::{
-    list_local_dir, preview_local_file, sftp_close, sftp_delete, sftp_download, sftp_list,
-    sftp_mkdir, sftp_open, sftp_preview, sftp_rename, sftp_upload,
+    list_local_dir, list_local_roots, preview_local_file, sftp_close, sftp_delete, sftp_download,
+    sftp_list, sftp_mkdir, sftp_open, sftp_preview, sftp_rename, sftp_upload,
 };
 use commands::snippets::{delete_snippet, execute_snippet, list_snippets, save_snippet};
-use commands::terminal::{terminal_close, terminal_open, terminal_resize, terminal_write};
+use commands::terminal::{
+    terminal_close, terminal_open, terminal_paste, terminal_resize, terminal_write,
+};
+use commands::tray::set_tray_behavior;
+use commands::tunnels::{tunnel_start, tunnel_stop};
 use commands::update::{check_update, install_update, load_update_config, save_update_config};
 use omnyssh_core::event::{CoreEvent, SessionId};
 use omnyssh_core::ssh::pty::PtyManager;
@@ -34,8 +40,8 @@ use tauri_specta::{collect_commands, collect_events, Builder};
 const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui/src/lib/bindings.ts");
 
 /// How long the hidden window may wait for the page before it is revealed anyway.
-/// The app has no tray icon, so a frontend that never loads must not leave a
-/// running process the user cannot see or reach.
+/// The tray is off until the page turns it on, so a frontend that never loads must
+/// not leave a running process the user cannot see or reach.
 const REVEAL_FALLBACK: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Set once the document is up. `is_visible()` stops answering that question the moment
@@ -71,8 +77,8 @@ const RETRY_MARKER: &str = "OMNYSSH_SOFTWARE_RENDER_RETRY";
 /// maximised. Such a window reopens at its own size in the corner of the display.
 const WINDOW_STATE_FLAGS: StateFlags = StateFlags::SIZE.union(StateFlags::POSITION);
 
-// The reveal is the only path to a visible window — the app has no tray icon — so the
-// exclusions above are too load-bearing to live in prose alone.
+// The reveal is the only path to a visible window until the page turns the tray on, so
+// the exclusions above are too load-bearing to live in prose alone.
 const _: () = assert!(!WINDOW_STATE_FLAGS.intersects(
     StateFlags::VISIBLE
         .union(StateFlags::MAXIMIZED)
@@ -97,6 +103,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             terminal_write,
             terminal_resize,
             terminal_close,
+            terminal_paste,
             sftp_open,
             sftp_list,
             sftp_upload,
@@ -107,10 +114,16 @@ fn specta_builder() -> Builder<tauri::Wry> {
             sftp_preview,
             sftp_close,
             list_local_dir,
+            list_local_roots,
             preview_local_file,
             start_key_setup,
             restore_password_auth,
+            tunnel_start,
+            tunnel_stop,
             refresh_metrics,
+            unlock_identity,
+            answer_password,
+            set_tray_behavior,
             check_update,
             install_update,
             load_update_config,
@@ -122,6 +135,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::MetricsUpdated,
             events::ServicesDetected,
             events::ServicesFailed,
+            events::TunnelStatusChanged,
             events::SnippetResult,
             events::TerminalExited,
             events::SftpConnected,
@@ -135,6 +149,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::KeySetupFailed,
             events::KeySetupRollback,
             events::UpdateAvailable,
+            events::KeyPassphraseRequired,
+            events::PasswordRequired,
             events::Error
         ])
 }
@@ -168,6 +184,20 @@ fn should_retry_software_rendering(
     dmabuf_disabled: bool,
 ) -> bool {
     !page_loaded && !already_retried && !dmabuf_disabled
+}
+
+/// Whether the single-instance plugin can start. On Linux it unwraps the session bus
+/// address, so one zbus cannot read — `disabled:`, as some sandboxes set — would abort
+/// the launch. With no bus at all it just stands down, and so does this app: each launch
+/// is then its own.
+#[cfg(target_os = "linux")]
+fn single_instance_can_start() -> bool {
+    zbus::Address::session().is_ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn single_instance_can_start() -> bool {
+    true
 }
 
 /// Re-exec ourselves with WebKit's software renderer. Returns only on failure.
@@ -208,7 +238,15 @@ fn main() {
     #[cfg(debug_assertions)]
     export_bindings(BINDINGS_PATH);
 
-    tauri::Builder::default()
+    let mut app = tauri::Builder::default();
+    // First, so a second launch exits before anything else starts; it brings the running
+    // window forward, from the tray too.
+    if single_instance_can_start() {
+        app = app.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::reveal(app)
+        }));
+    }
+    app
         // Persists UI prefs (theme, sidebar collapse, refresh interval) from the
         // frontend JS API — no bespoke command (tech-gui.md §4.2, §5.1).
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -224,16 +262,18 @@ fn main() {
                 .build(),
         )
         .invoke_handler(builder.invoke_handler())
+        .on_menu_event(tray::on_menu_event)
+        .on_window_event(tray::on_window_event)
         // The window is created hidden (tauri.conf.json `visible: false`) so the
         // launch never shows the webview's blank base colour; reveal it once the
         // document — stylesheet included — is up.
         .on_page_load(|webview, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 PAGE_LOADED.store(true, std::sync::atomic::Ordering::Release);
-                let window = webview.window();
                 // Reveal once: a later page load must not raise the window over
-                // whatever the user is doing.
-                if !window.is_visible().unwrap_or(false) {
+                // whatever the user is doing, nor out of the tray.
+                if !tray::REVEALED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    let window = webview.window();
                     let _ = window.show();
                     // A window shown after build does not become key on its own everywhere.
                     let _ = window.set_focus();
@@ -246,11 +286,11 @@ fn main() {
             let reveal = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(REVEAL_FALLBACK).await;
-                if let Some(window) = reveal.get_webview_window("main") {
-                    // Only when the page never got there: on macOS showing an
-                    // already-visible window raises it over whatever the user
-                    // switched to meanwhile.
-                    if !window.is_visible().unwrap_or(false) {
+                // Only when the page never got there: on macOS showing an
+                // already-visible window raises it over whatever the user switched to
+                // meanwhile.
+                if !tray::REVEALED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    if let Some(window) = reveal.get_webview_window("main") {
                         let _ = window.show();
                     }
                 }
@@ -262,7 +302,9 @@ fn main() {
             // alone. Kept out of debug builds because `tauri dev` waits on a dev server,
             // and a slow one starting is not a broken graphics stack.
             #[cfg(all(target_os = "linux", not(debug_assertions)))]
-            tauri::async_runtime::spawn(async {
+            let heal = app.handle().clone();
+            #[cfg(all(target_os = "linux", not(debug_assertions)))]
+            tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(RENDER_HEAL_DEADLINE).await;
                 if should_retry_software_rendering(
                     PAGE_LOADED.load(std::sync::atomic::Ordering::Acquire),
@@ -274,6 +316,10 @@ fn main() {
                     eprintln!(
                         "OmnySSH: the interface never loaded — restarting once with software rendering"
                     );
+                    // The restarted image claims the single-instance name again, and
+                    // finding it still held it would take itself for a second launch
+                    // and quit.
+                    tauri_plugin_single_instance::destroy(&heal);
                     // `exec` returns only on failure; carry on with this process.
                     let err = exec_software_render_retry();
                     eprintln!("OmnySSH: the restart failed ({err}) — continuing as is");
@@ -285,6 +331,8 @@ fn main() {
             // bytes into `raw_tx`; a forwarder demuxes them into per-tab channels.
             let (raw_tx, raw_rx) = tokio::sync::mpsc::channel::<(SessionId, Vec<u8>)>(256);
             let pty = PtyManager::with_raw_output(raw_tx);
+            // The bridge hands each PTY exit to that forwarder, behind the session's bytes.
+            let (exit_tx, exit_rx) = tokio::sync::mpsc::channel::<SessionId>(64);
 
             // Pre-load the shared host config so the first `list_hosts` paints
             // immediately. A load failure here is non-fatal — the frontend's
@@ -296,10 +344,15 @@ fn main() {
             app.manage(gui_state);
 
             // Spawn the forwarders after `manage` so both can reach `GuiState` via
-            // `app.state()` (the bridge maps PtyExited; the tap routes raw bytes).
+            // `app.state()` (the bridge tracks tunnel statuses; the tap routes raw bytes
+            // and ends exited tabs).
             let handle = app.handle().clone();
-            tauri::async_runtime::spawn(bridge::forward_core_events(handle.clone(), engine_rx));
-            tauri::async_runtime::spawn(bridge::forward_terminal_output(handle, raw_rx));
+            tauri::async_runtime::spawn(bridge::forward_core_events(
+                handle.clone(),
+                engine_rx,
+                exit_tx,
+            ));
+            tauri::async_runtime::spawn(bridge::forward_terminal_output(handle, raw_rx, exit_rx));
 
             // The pollers and the startup update check are both started by the frontend's
             // first `reload_hosts`, once its event bridge is listening — starting them
@@ -307,8 +360,9 @@ fn main() {
             // `UpdateAvailable` before the webview can receive them (§3.4).
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to launch OmnySSH Desktop");
+        .build(tauri::generate_context!())
+        .expect("failed to launch OmnySSH Desktop")
+        .run(tray::on_run_event);
 }
 
 #[cfg(test)]

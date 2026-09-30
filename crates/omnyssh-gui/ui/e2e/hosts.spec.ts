@@ -6,8 +6,8 @@ import { expect, test, type Page } from '@playwright/test';
 // `hosts-loaded` event through the same listener the app registers — so a save/delete
 // round-trips into the dashboard grid exactly as the real backend would drive it.
 const HOSTS = [
-  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: ['prod'], source: 'manual', hasKey: true },
-  { name: 'imported', hostname: 'imported.example.com', user: 'root', port: 22, tags: [], source: 'sshConfig', hasKey: false }
+  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: ['prod'], source: 'manual', hasKey: true, localForwards: [], tunnelAutostart: false, forwardAgent: false },
+  { name: 'imported', hostname: 'imported.example.com', user: 'root', port: 22, tags: [], source: 'sshConfig', hasKey: false, localForwards: [], tunnelAutostart: false, forwardAgent: false }
 ];
 
 async function boot(page: Page): Promise<void> {
@@ -46,7 +46,10 @@ async function boot(page: Page): Promise<void> {
                 tags: (h.tags as string[]) ?? [],
                 notes: h.notes,
                 source: 'manual',
-                hasKey: !!h.identityFile
+                hasKey: !!h.identityFile,
+                localForwards: h.localForwards,
+                tunnelAutostart: h.tunnelAutostart,
+                forwardAgent: h.forwardAgent
               };
               const i = state.hosts.findIndex((x) => (x as { name: string }).name === view.name);
               if (i >= 0) state.hosts[i] = { ...state.hosts[i], ...view };
@@ -112,6 +115,39 @@ test('edits a manual host in place', async ({ page }) => {
 
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByText('deploy@web-1b.example.com:22')).toBeVisible();
+});
+
+test.describe('on Linux', () => {
+  test.use({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)' });
+
+  test('agent forwarding is off until switched on, and stays on', async ({ page }) => {
+    await boot(page);
+
+    await page.getByRole('button', { name: 'Edit web-1' }).click();
+    let editor = page.getByRole('dialog', { name: 'Edit host' });
+    const agent = editor.getByRole('switch', { name: 'Forward SSH agent' });
+    await expect(agent).toHaveAttribute('aria-checked', 'false');
+    await agent.click();
+    await editor.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Edit web-1' }).click();
+    editor = page.getByRole('dialog', { name: 'Edit host' });
+    await expect(editor.getByRole('switch', { name: 'Forward SSH agent' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+  });
+});
+
+// The Desktop Chrome device reports a Windows user agent.
+test('agent forwarding says it is not on Windows yet', async ({ page }) => {
+  await boot(page);
+
+  await page.getByRole('button', { name: 'Edit web-1' }).click();
+  const editor = page.getByRole('dialog', { name: 'Edit host' });
+  await expect(editor.getByRole('switch', { name: 'Forward SSH agent' })).toBeDisabled();
+  await expect(editor.getByText('Not available on Windows yet.')).toBeVisible();
 });
 
 test('deletes a manual host after confirmation', async ({ page }) => {

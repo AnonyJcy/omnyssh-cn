@@ -5,10 +5,11 @@
   // surfaces inline without closing. Semantic tokens only.
   import { onMount } from 'svelte';
   import type { HostInputDto } from '$lib/bindings';
-  import { Button } from '$lib/theme';
+  import { Button, Icon } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
-  import { formToInput, type HostFormFields } from './hostForm';
+  import { isWindows } from '$lib/platform';
+  import { emptyForwardRow, formToInput, type HostFormFields } from './hostForm';
   import { t } from '$lib/i18n';
 
   let {
@@ -64,6 +65,11 @@
   const secretHint = $derived(mode === 'edit' ? $t('host_editor.secret_hint') : undefined);
 
   const label = 'block space-y-1 text-xs font-medium text-muted';
+  const forwardGrid = 'grid grid-cols-[8.5rem,1fr,4.5rem,1.75rem] items-center gap-2';
+  const smallBtn =
+    'inline-flex items-center gap-1 rounded-full border border-default px-2 py-0.5 text-xs text-muted transition ' +
+    'hover:border-strong hover:bg-accent hover:text-accent-fg ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
   const field =
     'w-full rounded-lg bg-surface-inset px-3 py-2 text-sm text-fg outline-none ' +
     'focus-visible:ring-2 focus-visible:ring-focus placeholder:text-faint';
@@ -130,7 +136,7 @@
           type="password"
           bind:value={fields.password}
           class={field}
-          placeholder={secretHint ?? 'For initial key setup only'}
+          placeholder={secretHint ?? 'Login password, not the key passphrase'}
           autocomplete="off"
         />
       </label>
@@ -168,6 +174,114 @@
       {#if fields.monitoring === 'tcpPort'}
         <p class="text-xs text-faint">{$t('host_editor.tcp_port_hint')}</p>
       {/if}
+
+      <div class="flex items-center justify-between gap-4 border-t border-default pt-3.5">
+        <div class="min-w-0">
+          <p class="text-sm text-fg">{$t('host_editor.forward_agent')}</p>
+          <p class="text-xs text-faint">
+            {$t('host_editor.forward_agent_desc')}
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={fields.forwardAgent}
+          aria-label={$t('host_editor.forward_agent')}
+          disabled={isWindows}
+          onclick={() => (fields.forwardAgent = !fields.forwardAgent)}
+          class="relative h-6 w-11 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:opacity-50 {fields.forwardAgent
+            ? 'bg-accent'
+            : 'bg-surface-inset'}"
+        >
+          <span
+            class="absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow-soft transition-[left] {fields.forwardAgent
+              ? 'left-[1.375rem]'
+              : 'left-0.5'}"
+          ></span>
+        </button>
+      </div>
+
+      <!-- Port forwarding (`ssh -L`): each row listens on a local port and carries it to
+           a host:port the server reaches. One tunnel per host carries every row. -->
+      <div class="space-y-2 border-t border-default pt-3.5">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-xs font-medium text-muted">{$t('host_editor.port_forwarding')}</span>
+          <button
+            type="button"
+            class={smallBtn}
+            onclick={() => fields.forwards.push(emptyForwardRow())}
+          >
+            <Icon name="plus" size={12} />
+            {$t('host_editor.add_forward')}
+          </button>
+        </div>
+        {#if fields.forwards.length}
+          <div class="{forwardGrid} text-[11px] text-faint">
+            <span>{$t('host_editor.local_port')}</span>
+            <span>{$t('host_editor.remote_host')}</span>
+            <span>{$t('host_editor.remote_port')}</span>
+            <span></span>
+          </div>
+          {#each fields.forwards as row, i (i)}
+            <div class={forwardGrid}>
+              <input
+                bind:value={row.local}
+                class="{field} font-mono"
+                placeholder="9443"
+                aria-label="Forward {i + 1} local port"
+              />
+              <input
+                bind:value={row.remoteHost}
+                class="{field} font-mono"
+                placeholder="localhost"
+                aria-label="Forward {i + 1} remote host"
+              />
+              <input
+                bind:value={row.remotePort}
+                inputmode="numeric"
+                class="{field} font-mono"
+                placeholder="9443"
+                aria-label="Forward {i + 1} remote port"
+              />
+              <button
+                type="button"
+                class="grid h-7 w-7 place-items-center rounded-lg text-muted transition hover:bg-surface-inset hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                title="Remove forward {i + 1}"
+                aria-label="Remove forward {i + 1}"
+                onclick={() => fields.forwards.splice(i, 1)}
+              >
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          {/each}
+          <p class="text-xs text-faint">
+            {$t('host_editor.port_forwarding_hint')}
+          </p>
+          <div class="flex items-center justify-between gap-4 pt-1">
+            <span class="text-sm text-fg">{$t('host_editor.tunnel_autostart')}</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={fields.tunnelAutostart}
+              aria-label={$t('host_editor.tunnel_autostart')}
+              onclick={() => (fields.tunnelAutostart = !fields.tunnelAutostart)}
+              class="relative h-6 w-11 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus {fields.tunnelAutostart
+                ? 'bg-accent'
+                : 'bg-surface-inset'}"
+            >
+              <span
+                class="absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow-soft transition-[left] {fields.tunnelAutostart
+                  ? 'left-[1.375rem]'
+                  : 'left-0.5'}"
+              ></span>
+            </button>
+          </div>
+        {:else}
+          <p class="text-xs text-faint">
+            {$t('host_editor.port_forwarding_empty')}
+          </p>
+        {/if}
+      </div>
 
       {#if error}
         <p class="text-xs text-status-crit">{error}</p>

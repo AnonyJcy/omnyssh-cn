@@ -173,9 +173,9 @@ jobs:
   #
   # Native Tauri bundles, renamed to stable `omnyssh-gui-<target>.<ext>` names so
   # install.sh can build download URLs the same way it does for the TUI. macOS
-  # ships unsigned (a documented one-time Gatekeeper bypass). Linux is x86_64 only
-  # — the webkit cross-compile for ARM is out of scope, and ARM/Termux users have
-  # the TUI.
+  # ships ad-hoc signed, not notarized (a documented one-time Gatekeeper bypass).
+  # Linux is x86_64 only — the webkit cross-compile for ARM is out of scope, and
+  # ARM/Termux users have the TUI.
   #
   #   macos-latest   → aarch64-apple-darwin   (native)        → .dmg
   #   macos-latest   → x86_64-apple-darwin    (cross)         → .dmg
@@ -230,7 +230,8 @@ jobs:
             gui-${{ matrix.target }}-cargo-
 
       # Tauri v2 build dependencies (webkit2gtk + appindicator; patchelf/file for
-      # the AppImage). Only Linux needs them; macOS/Windows use system webviews.
+      # the AppImage, squashfs-tools to unpack it again below). Only Linux needs
+      # them; macOS/Windows use system webviews.
       - name: Install Linux bundle dependencies
         if: runner.os == 'Linux'
         timeout-minutes: 6
@@ -248,7 +249,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            libayatana-appindicator3-dev libssl-dev patchelf file
+            libayatana-appindicator3-dev libssl-dev patchelf file squashfs-tools
 
       - name: Install the Tauri CLI
         run: npm install -g @tauri-apps/cli@^2
@@ -288,6 +289,20 @@ jobs:
           version="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
           # An empty version would make the check below match anything.
           [ -n "$version" ] || { echo "no version in Cargo.toml"; exit 1; }
+          # Gatekeeper calls a downloaded app "damaged", with no way past it, when its
+          # signature does not seal the bundle: what the linker leaves on the binary
+          # alone. So the app users get, inside the dmg, has to verify.
+          verify_dmg() {
+            local mnt status=0
+            mnt="$(mktemp -d)"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$1" >/dev/null
+            codesign --verify --deep --strict --verbose=2 "$mnt"/*.app || status=$?
+            # macOS's Local Network prompt needs it; it comes from crates/omnyssh-gui/Info.plist.
+            plutil -extract NSLocalNetworkUsageDescription raw \
+              "$mnt"/*.app/Contents/Info.plist >/dev/null || status=1
+            hdiutil detach "$mnt" >/dev/null
+            return "$status"
+          }
           collect() {
             local files=("$out/$1"/*"$2")
             [ -e "${files[0]}" ] || { echo "no $2 bundle"; exit 1; }
@@ -301,7 +316,8 @@ jobs:
           # stops emitting one fails the dry run instead of only the tag.
           for format in ${BUNDLES//,/ }; do
             case "$format" in
-              dmg)      collect dmg      .dmg      "${{ matrix.asset }}.dmg" ;;
+              dmg)      collect dmg      .dmg      "${{ matrix.asset }}.dmg"
+                        verify_dmg "${{ matrix.asset }}.dmg" ;;
               appimage) collect appimage .AppImage "${{ matrix.asset }}.AppImage" ;;
               deb)      collect deb      .deb      "${{ matrix.asset }}.deb" ;;
               rpm)      collect rpm      .rpm      "${{ matrix.asset }}.rpm" ;;
@@ -309,6 +325,28 @@ jobs:
             esac
           done
           ls -lh "${{ matrix.asset }}".*
+
+      # linuxdeploy bundles the build host's display-stack libraries into the
+      # AppImage and AppRun puts them ahead of the system's, so a current Mesa fails
+      # to create an EGL display and the app never opens (tauri-apps/tauri#15976).
+      # Rebuilding the bundle without them needs appimagetool, which upstream ships
+      # only as a release asset — pinned and checksummed, since it rewrites the file
+      # this job publishes.
+      - name: Install appimagetool
+        if: contains(matrix.bundles, 'appimage')
+        run: |
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" |
+            sha256sum -c -
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/
+
+      - name: Unbundle the display stack from the AppImage
+        if: contains(matrix.bundles, 'appimage')
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1   # the runners have no FUSE
+        run: scripts/appimage-unbundle-display-stack.sh "${{ matrix.asset }}.AppImage"
 
       - name: Collect bundles (Windows)
         if: runner.os == 'Windows'

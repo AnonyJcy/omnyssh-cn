@@ -3,7 +3,7 @@ import type { ConnectionStatusDto, HostDto, MetricsDto } from '$lib/bindings';
 import { deriveHostSummary } from './hostSummary';
 
 function host(name: string): HostDto {
-  return { name, hostname: '10.0.0.1', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, monitoring: 'ssh' };
+  return { name, hostname: '10.0.0.1', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, monitoring: 'ssh', localForwards: [], tunnelAutostart: false, forwardAgent: false };
 }
 
 function metrics(partial: Partial<MetricsDto>): MetricsDto {

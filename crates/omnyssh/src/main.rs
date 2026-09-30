@@ -1,4 +1,6 @@
 use clap::Parser;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod app;
 mod cli;
@@ -38,12 +40,22 @@ async fn main() -> anyhow::Result<()> {
     let file_appender = tracing_appender::rolling::daily(&log_dir, "omnyssh.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
+    // russh dumps auth packets, login passwords included: its client auth code
+    // at debug, every packet it writes at trace. Kept out whatever -v or
+    // RUST_LOG ask for.
+    let no_secrets = tracing_subscriber::filter::filter_fn(|meta| {
+        let (target, level) = (meta.target(), *meta.level());
+        !(target.starts_with("russh::client::encrypted") && level > tracing::Level::INFO
+            || target.starts_with("russh::session") && level > tracing::Level::DEBUG)
+    });
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
         )
         .with_writer(non_blocking)
+        .finish()
+        .with(no_secrets)
         .init();
 
     if pruned_logs > 0 {

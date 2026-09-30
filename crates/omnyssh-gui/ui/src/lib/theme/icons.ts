@@ -32,4 +32,5 @@ export type IconName =
   | 'eyeOff'
   | 'settings'
   | 'telegram'
-  | 'star';
+  | 'star'
+  | 'tunnel';

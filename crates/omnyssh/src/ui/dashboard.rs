@@ -145,7 +145,7 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState, view: &ViewSta
     }
 
     // Build key hints.
-    let mut hints = String::from("r:refresh  s:sort  t:tags  /:search  a:add  x:execute");
+    let mut hints = String::from("r:refresh  s:sort  t:tags  /:search  a:add  x:execute  f:tunnel");
 
     // Check if selected host needs SSH key setup.
     // Show "Shift+K:ssh-setup" hint if selected host has password but no identity_file.
@@ -268,6 +268,8 @@ fn render_grid(frame: &mut Frame, area: Rect, state: &AppState, view: &ViewState
                         services: state.services.get(&host.name).map(|s| s.as_slice()),
                         monitoring: host.monitoring,
                         monitor_port: host.monitor_port,
+                        has_forwards: !host.local_forwards.is_empty(),
+                        tunnel: state.tunnel_statuses.get(&host.name),
                     },
                     is_selected,
                     &view.theme,
@@ -367,6 +369,9 @@ pub fn handle_input(key: KeyEvent, view: &mut ViewState) -> Option<AppAction> {
 
         // SSH key setup for selected host.
         KeyCode::Char('K') => Some(AppAction::StartKeySetup),
+
+        // Start / stop the selected host's tunnel.
+        KeyCode::Char('f') => Some(AppAction::ToggleTunnel),
 
         // Esc: clear status message / search query.
         KeyCode::Esc => {

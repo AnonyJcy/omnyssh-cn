@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 // is fired after `reload_hosts` (which the layout calls once its listeners are attached),
 // mirroring the startup check.
 const HOSTS = [
-  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: [], source: 'manual', hasKey: true }
+  { name: 'web-1', hostname: 'web-1.example.com', user: 'deploy', port: 22, tags: [], source: 'manual', hasKey: true, localForwards: [], tunnelAutostart: false, forwardAgent: false }
 ];
 
 const UPDATE = {
@@ -16,9 +16,15 @@ const UPDATE = {
   canSelfUpdate: true
 };
 
-async function boot(page: Page, opts: { fireUpdateOnBoot: boolean }): Promise<void> {
+async function boot(
+  page: Page,
+  opts: {
+    fireUpdateOnBoot: boolean;
+    traySupport?: { available: boolean; minimize: boolean };
+  }
+): Promise<void> {
   await page.addInitScript(
-    ({ hosts, update, fireUpdateOnBoot }) => {
+    ({ hosts, update, fireUpdateOnBoot, traySupport }) => {
       let cbid = 0;
       const listeners: Record<string, number[]> = {};
       const state = {
@@ -55,6 +61,9 @@ async function boot(page: Page, opts: { fireUpdateOnBoot: boolean }): Promise<vo
               return Promise.resolve(null);
             case 'check_update':
               return Promise.resolve({ ...update });
+            case 'set_tray_behavior':
+              ((win.__tray ??= []) as unknown[]).push({ ...args });
+              return Promise.resolve({ ...traySupport });
             case 'plugin:event|listen': {
               const { event, handler } = args as { event: string; handler: number };
               (listeners[event] ||= []).push(handler);
@@ -71,7 +80,12 @@ async function boot(page: Page, opts: { fireUpdateOnBoot: boolean }): Promise<vo
         }
       };
     },
-    { hosts: HOSTS, update: UPDATE, fireUpdateOnBoot: opts.fireUpdateOnBoot }
+    {
+      hosts: HOSTS,
+      update: UPDATE,
+      fireUpdateOnBoot: opts.fireUpdateOnBoot,
+      traySupport: opts.traySupport ?? { available: true, minimize: true }
+    }
   );
   await page.goto('/');
   await expect(page.getByText('web-1', { exact: true })).toBeVisible();
@@ -138,4 +152,67 @@ test('a settings toggle preserves a skipVersion the banner wrote out-of-band', a
   );
   expect(saved?.skipVersion).toBe('2.0.0');
   expect(saved?.checkOnStartup).toBe(false);
+});
+
+const trayCalls = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __tray?: unknown[] }).__tray ?? []);
+
+// The Desktop Chrome device reports a Windows user agent.
+test('the tray settings reach the backend and survive a restart', async ({ page }) => {
+  await boot(page, { fireUpdateOnBoot: false });
+  // Off by default, and the backend is told so on start.
+  await expect.poll(() => trayCalls(page)).toEqual([{ minimizeToTray: false, closeToTray: false }]);
+
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const close = page.getByRole('switch', { name: 'Close to tray' });
+  await expect(page.getByRole('switch', { name: 'Minimize to tray' })).toHaveAttribute(
+    'aria-checked',
+    'false'
+  );
+  await close.click();
+  await expect(close).toHaveAttribute('aria-checked', 'true');
+  await expect
+    .poll(async () => (await trayCalls(page)).at(-1))
+    .toEqual({ minimizeToTray: false, closeToTray: true });
+
+  await page.reload();
+  await expect(page.getByText('web-1', { exact: true })).toBeVisible();
+  await expect.poll(() => trayCalls(page)).toEqual([{ minimizeToTray: false, closeToTray: true }]);
+});
+
+test('without a system tray the settings say so and stay off', async ({ page }) => {
+  await boot(page, { fireUpdateOnBoot: false, traySupport: { available: false, minimize: false } });
+
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByText('This desktop has no system tray')).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Close to tray' })).toBeDisabled();
+  await expect(page.getByRole('switch', { name: 'Minimize to tray' })).toBeDisabled();
+});
+
+test('under Wayland the window closes to the tray but cannot minimize into it', async ({
+  page
+}) => {
+  await boot(page, { fireUpdateOnBoot: false, traySupport: { available: true, minimize: false } });
+
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByRole('switch', { name: 'Minimize to tray' })).toBeDisabled();
+  await expect(page.getByText(/Not on Wayland/)).toBeVisible();
+  await expect(page.getByRole('switch', { name: 'Close to tray' })).toBeEnabled();
+});
+
+test.describe('on macOS', () => {
+  test.use({
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)'
+  });
+
+  test('the window closes to the menu bar, and minimizing stays with the Dock', async ({
+    page
+  }) => {
+    await boot(page, { fireUpdateOnBoot: false });
+
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.getByRole('switch', { name: 'Close to the menu bar' })).toBeVisible();
+    await expect(page.getByRole('switch', { name: 'Minimize to tray' })).toHaveCount(0);
+  });
 });

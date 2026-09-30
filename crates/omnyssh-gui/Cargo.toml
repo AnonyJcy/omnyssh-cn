@@ -2,6 +2,7 @@
 name = "omnyssh-gui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "OmnySSH Desktop — native GUI for the OmnySSH engine"
@@ -20,7 +21,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # The `specta` feature makes `tauri::ipc::Channel` a `specta::Type`, so the terminal
 # stream channel (§3.3/§3.6) exports through tauri-specta like any other DTO.
-tauri = { version = "2", features = ["specta"] }
+# `tray-icon` also makes the bundler depend on libayatana-appindicator3 on Linux.
+tauri = { version = "2", features = ["specta", "tray-icon"] }
 omnyssh-core = { path = "../omnyssh-core" }
 serde = { workspace = true }
 tokio = { workspace = true }
@@ -43,14 +45,29 @@ tauri-plugin-opener = "2"
 # Restores the window's size and position between launches. Registered Rust-side only,
 # so none of its commands are granted to the frontend.
 tauri-plugin-window-state = "2"
+# A second launch shows the running window instead: one hidden in the tray could not be
+# reached otherwise, and two instances would fight over the tunnels' ports. 2.x only —
+# 3.0 alphas are published.
+tauri-plugin-single-instance = "2.4"
 # `generate_context!` embeds the `plugins.updater` config and expands to serde_json at
 # runtime; also asserts the wire form of DTOs in tests (e.g. HostDto never carries a password).
 serde_json = "1"
 
-# Only to restore SIGPIPE after a failed `exec` in the AppImage render retry — `std`
-# resets it as part of the child setup it runs in this process and never puts it back.
+# To restore SIGPIPE after a failed `exec` in the AppImage render retry — `std` resets
+# it as part of the child setup it runs in this process and never puts it back — and to
+# look for the tray library before tray-icon panics over a missing one.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# The session bus: its address, read the way the single-instance plugin will (it panics
+# on one it cannot parse), and whether a StatusNotifier tray is running. Already built
+# for that plugin.
+zbus = "5"
+# Whether an X server runs an XEmbed tray; loaded at runtime, like tao loads it.
+x11-dl = "2"
+# Whether the window is native Wayland, which never reports being minimized.
+gtk = "0.18"
+# The webview's own paste, for the chord WebKitGTK cannot see under a non-Latin layout.
+webkit2gtk = "2"
 
 [dev-dependencies]
 # Property-based coverage of snippet param substitution (tech-gui.md §6.4, §7 Stage 2.2).

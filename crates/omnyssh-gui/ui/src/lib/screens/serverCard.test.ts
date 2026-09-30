@@ -2,10 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { ConnectionStatusDto, HostDto, MetricsDto } from '$lib/bindings';
 import type { HostServices } from '$lib/stores/services';
-import { deriveCard, metricStatus, QUICK_ACTIONS, filterHosts } from './serverCard';
+import {
+  deriveCard,
+  deriveTunnel,
+  filterHosts,
+  forwardListen,
+  forwardTarget,
+  metricStatus,
+  QUICK_ACTIONS
+} from './serverCard';
 
 function host(name = 'web-1'): HostDto {
-  return { name, hostname: '10.0.0.1', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, monitoring: 'ssh' };
+  return { name, hostname: '10.0.0.1', user: 'root', port: 22, tags: [], source: 'manual', hasKey: false, monitoring: 'ssh', localForwards: [], tunnelAutostart: false, forwardAgent: false };
 }
 
 function tcpHost(name = 'fw-1'): HostDto {
@@ -56,6 +64,15 @@ describe('deriveCard — health state', () => {
     const card = deriveCard(host(), { kind: 'failed', message: 'refused' }, undefined, undefined);
     expect(card.overall).toBe('off');
     expect(card.offline).toBe(true);
+  });
+
+  it('says why a failed host is down, and nothing otherwise', () => {
+    const failed: ConnectionStatusDto = { kind: 'failed', message: 'SSH connection failed: Connection refused' };
+    expect(deriveCard(host(), failed, undefined, undefined).failure).toBe(failed.message);
+    expect(deriveCard(host(), failed, metrics({ cpuPercent: 40 }), undefined).failure).toBe(failed.message);
+    expect(deriveCard(tcpHost(), failed, undefined, undefined).failure).toBe(failed.message);
+    expect(deriveCard(host(), CONNECTED, undefined, undefined).failure).toBeUndefined();
+    expect(deriveCard(host(), { kind: 'connecting' }, undefined, undefined).failure).toBeUndefined();
   });
 
   it('a failed host keeps showing its last metrics rather than an offline state', () => {
@@ -236,3 +253,63 @@ describe('deriveCard — reachability hosts', () => {
     expect(card.metricRows).toHaveLength(3);
   });
 });
+
+describe('deriveTunnel — the card\'s tunnel block', () => {
+  const forwarded = (): HostDto => ({
+    ...host('nas'),
+    localForwards: [{ bindPort: 9443, remoteHost: '127.0.0.1', remotePort: 9443 }]
+  });
+
+  it('is absent for a host without forwards, whatever its status', () => {
+    expect(deriveTunnel(host(), { kind: 'up' })).toBeUndefined();
+    expect(deriveCard(host(), CONNECTED, undefined, undefined, { kind: 'up' }).tunnel).toBeUndefined();
+  });
+
+  it('reads as off until a status arrives, and after a stop', () => {
+    expect(deriveTunnel(forwarded(), undefined)).toMatchObject({ running: false, label: 'Off', dot: 'unknown' });
+  });
+
+  it('tells running states from ended ones', () => {
+    expect(deriveTunnel(forwarded(), { kind: 'connecting' })).toMatchObject({ running: true, dot: 'unknown' });
+    expect(deriveTunnel(forwarded(), { kind: 'up' })).toMatchObject({ running: true, dot: 'ok', label: 'Active' });
+    expect(deriveTunnel(forwarded(), { kind: 'retrying', message: 'connection lost' })).toMatchObject({
+      running: true,
+      dot: 'warn',
+      message: 'connection lost'
+    });
+    expect(deriveTunnel(forwarded(), { kind: 'failed', message: 'port 9443 in use' })).toMatchObject({
+      running: false,
+      dot: 'off',
+      message: 'port 9443 in use'
+    });
+  });
+
+  it('rides along on a reachability card too — a port check still has SSH credentials', () => {
+    const card = deriveCard({ ...forwarded(), monitoring: 'tcpPort' }, CONNECTED, undefined, undefined, { kind: 'up' });
+    expect(card.reachability).toBe('reachable');
+    expect(card.tunnel?.label).toBe('Active');
+  });
+
+  it('labels where a forward listens', () => {
+    const listen = (bindAddress: string | undefined, on = false) =>
+      forwardListen({ bindAddress, bindPort: 80, remoteHost: 'x', remotePort: 1 }, on);
+    expect(listen(undefined)).toBe('localhost:80');
+    expect(listen('0.0.0.0')).toBe('0.0.0.0:80');
+    expect(listen('')).toBe('*:80');
+    expect(listen('::1')).toBe('[::1]:80');
+    // A LAN address of this machine is masked on stream; wildcards are not.
+    expect(listen('192.168.1.20', true)).not.toContain('192.168.1.20');
+    expect(listen('0.0.0.0', true)).toBe('0.0.0.0:80');
+  });
+
+  it('masks a target in streamer mode, but not the server\'s own loopback', () => {
+    const target = (remoteHost: string, on: boolean) => forwardTarget({ bindPort: 1, remoteHost, remotePort: 5432 }, on);
+    expect(target('10.20.30.40', false)).toBe('10.20.30.40:5432');
+    expect(target('10.20.30.40', true)).not.toContain('10.20.30.40');
+    for (const loopback of ['localhost', '127.0.0.1', '::1']) {
+      expect(target(loopback, true)).toContain(loopback);
+    }
+    expect(target('fe80::1', false)).toBe('[fe80::1]:5432');
+  });
+});
+

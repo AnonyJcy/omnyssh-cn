@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostDto } from '$lib/bindings';
-import { emptyForm, formFromHost, formToInput, type HostFormFields } from './hostForm';
+import { emptyForm, emptyForwardRow, formFromHost, formToInput, type HostFormFields } from './hostForm';
 
 function fields(partial: Partial<HostFormFields>): HostFormFields {
   return { ...emptyForm(), ...partial };
@@ -16,6 +16,9 @@ function host(partial: Partial<HostDto>): HostDto {
     source: 'manual',
     hasKey: false,
     monitoring: 'ssh',
+    localForwards: [],
+    tunnelAutostart: false,
+    forwardAgent: false,
     ...partial
   };
 }
@@ -127,8 +130,23 @@ describe('formFromHost', () => {
       tags: ['ops'],
       notes: 'x',
       monitoring: 'ssh',
+      localForwards: [],
+      tunnelAutostart: false,
+      forwardAgent: false,
       monitorPort: undefined
     });
+  });
+});
+
+describe('formToInput — agent forwarding', () => {
+  it('sends the switch as set, with no forwards needed', () => {
+    const r = formToInput(fields({ name: 'lab', hostname: 'h', forwardAgent: true }));
+    expect(r.ok && r.input.forwardAgent).toBe(true);
+  });
+
+  it('seeds the edit form from the host, an ssh-config import included', () => {
+    expect(formFromHost(host({ source: 'sshConfig', forwardAgent: true })).forwardAgent).toBe(true);
+    expect(emptyForm().forwardAgent).toBe(false);
   });
 });
 
@@ -192,5 +210,77 @@ describe('formToInput — monitoring mode', () => {
     const fields = formFromHost(host({ monitoring: 'tcpPort', monitorPort: 8443 }));
     expect(fields.monitoring).toBe('tcpPort');
     expect(fields.monitorPort).toBe('8443');
+  });
+});
+
+describe('formToInput — port forwarding', () => {
+  const base = { name: 'nas', hostname: '10.0.0.5' };
+  const row = (local: string, remoteHost: string, remotePort: string) => ({ local, remoteHost, remotePort });
+
+  it('reads a port, an address and a bracketed IPv6 address on the local side', () => {
+    const r = formToInput(
+      fields({
+        ...base,
+        forwards: [
+          row('9443', 'localhost', '9443'),
+          row('0.0.0.0:8080', 'web.internal', '80'),
+          row('[::1]:5432', '[fe80::1]', '5432')
+        ]
+      })
+    );
+    expect(r.ok && r.input.localForwards).toEqual([
+      { bindAddress: undefined, bindPort: 9443, remoteHost: 'localhost', remotePort: 9443 },
+      { bindAddress: '0.0.0.0', bindPort: 8080, remoteHost: 'web.internal', remotePort: 80 },
+      { bindAddress: '::1', bindPort: 5432, remoteHost: 'fe80::1', remotePort: 5432 }
+    ]);
+  });
+
+  it('drops a row left blank', () => {
+    const r = formToInput(fields({ ...base, forwards: [emptyForwardRow(), row('3000', 'localhost', '3000')] }));
+    expect(r.ok && r.input.localForwards).toHaveLength(1);
+  });
+
+  it('names the row and the problem', () => {
+    const cases: [ReturnType<typeof row>, string][] = [
+      [row('0', 'localhost', '80'), 'Forward 1: local port'],
+      [row('::1:8080', 'localhost', '80'), 'Forward 1: put an IPv6 address in brackets'],
+      [row('8080', '  ', '80'), 'Forward 1: enter the host'],
+      [row('8080', 'local host', '80'), 'Forward 1: enter the host'],
+      [row('8080', 'localhost', '70000'), 'Forward 1: remote port']
+    ];
+    for (const [bad, message] of cases) {
+      const r = formToInput(fields({ ...base, forwards: [bad] }));
+      expect(r.ok ? '' : r.error).toContain(message);
+    }
+  });
+
+  it('refuses two forwards on one local port, however it is written', () => {
+    const r = formToInput(
+      fields({ ...base, forwards: [row('9443', 'localhost', '1'), row('localhost:9443', 'localhost', '2')] })
+    );
+    expect(r).toEqual({ ok: false, error: 'Forward 2 listens on the same port as forward 1' });
+  });
+
+  it('drops the autostart flag along with the last forward', () => {
+    const r = formToInput(fields({ ...base, forwards: [], tunnelAutostart: true }));
+    expect(r.ok && r.input.tunnelAutostart).toBe(false);
+  });
+
+  it('round-trips forwards and autostart through the edit form', () => {
+    const original = host({
+      localForwards: [
+        { bindPort: 9443, remoteHost: '127.0.0.1', remotePort: 9443 },
+        { bindAddress: '::1', bindPort: 8080, remoteHost: 'db', remotePort: 5432 }
+      ],
+      tunnelAutostart: true
+    });
+    const f = formFromHost(original);
+    expect(f.forwards.map((r) => r.local)).toEqual(['9443', '[::1]:8080']);
+    const r = formToInput(f);
+    expect(r.ok && r.input.tunnelAutostart).toBe(true);
+    expect(r.ok && r.input.localForwards).toEqual([
+      { bindAddress: undefined, bindPort: 9443, remoteHost: '127.0.0.1', remotePort: 9443 },
+      { bindAddress: '::1', bindPort: 8080, remoteHost: 'db', remotePort: 5432 }
+    ]);
   });
 });

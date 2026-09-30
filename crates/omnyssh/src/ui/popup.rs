@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -7,8 +9,9 @@ use ratatui::{
 };
 
 use crate::app::{
-    FormField, HostForm, SnippetForm, SnippetResultEntry, UpdateButton, UpdatePopup,
-    UpdatePopupPhase, FORM_FIELD_LABELS, SNIPPET_FORM_FIELD_LABELS, UPDATE_BUTTONS,
+    FormField, HostForm, PassphrasePrompt, PasswordPrompt, SnippetForm, SnippetResultEntry,
+    UpdateButton, UpdatePopup, UpdatePopupPhase, FORM_FIELD_LABELS, SNIPPET_FORM_FIELD_LABELS,
+    UPDATE_BUTTONS,
 };
 use crate::ui::theme::Theme;
 use omnyssh_core::ssh::client::Host;
@@ -151,6 +154,10 @@ pub fn render_help(frame: &mut Frame, theme: &Theme) {
         Span::styled("        Setup SSH key", desc_style),
     ]));
     col1_lines.push(Line::from(vec![
+        Span::styled("  f", key_style),
+        Span::styled("        Tunnel on/off", desc_style),
+    ]));
+    col1_lines.push(Line::from(vec![
         Span::styled("  hjkl", key_style),
         Span::styled("    Navigate", desc_style),
     ]));
@@ -175,6 +182,10 @@ pub fn render_help(frame: &mut Frame, theme: &Theme) {
     col2_lines.push(Line::from(vec![
         Span::styled("  4-9", key_style),
         Span::styled("      Quick view", desc_style),
+    ]));
+    col2_lines.push(Line::from(vec![
+        Span::styled("  f", key_style),
+        Span::styled("        Tunnel on/off", desc_style),
     ]));
     col2_lines.push(Line::from(""));
 
@@ -219,6 +230,12 @@ pub fn render_help(frame: &mut Frame, theme: &Theme) {
         Span::styled("  .", key_style),
         Span::styled("        Toggle hidden", desc_style),
     ]));
+    if cfg!(windows) {
+        col2_lines.push(Line::from(vec![
+            Span::styled("  d", key_style),
+            Span::styled("        Next drive", desc_style),
+        ]));
+    }
     col2_lines.push(Line::from(""));
 
     col2_lines.push(Line::from(Span::styled(" SNIPPETS", section_style)));
@@ -338,7 +355,11 @@ pub fn render_host_form(frame: &mut Frame, form: &HostForm, title: &str, theme: 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let num_fields = FORM_FIELD_LABELS.len();
+    // A terminal too short for every field shows the ones around the focus;
+    // the padding and spacer rows point at the ones scrolled out.
+    let capacity = usize::from(inner.height.saturating_sub(3) / 2);
+    let window = field_window(FORM_FIELD_LABELS.len(), form.focused_field, capacity);
+    let num_fields = window.len();
     // 1 blank line top + 2 lines per field (label + input) + 2 hint lines
     let mut constraints: Vec<Constraint> = Vec::with_capacity(num_fields * 2 + 3);
     constraints.push(Constraint::Length(1)); // top padding
@@ -367,9 +388,23 @@ pub fn render_host_form(frame: &mut Frame, form: &HostForm, title: &str, theme: 
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
 
-    for (i, label) in FORM_FIELD_LABELS.iter().enumerate() {
-        let label_row = rows[1 + i * 2];
-        let input_row = rows[2 + i * 2];
+    let more_style = Style::default().fg(theme.text_muted);
+    if window.start > 0 {
+        let more = format!("  ↑ {} more", window.start);
+        frame.render_widget(Paragraph::new(Span::styled(more, more_style)), rows[0]);
+    }
+    if window.end < FORM_FIELD_LABELS.len() {
+        let more = format!("  ↓ {} more", FORM_FIELD_LABELS.len() - window.end);
+        frame.render_widget(
+            Paragraph::new(Span::styled(more, more_style)),
+            rows[1 + num_fields * 2],
+        );
+    }
+
+    for (row, i) in window.enumerate() {
+        let label = FORM_FIELD_LABELS[i];
+        let label_row = rows[1 + row * 2];
+        let input_row = rows[2 + row * 2];
         let is_focused = i == form.focused_field;
 
         // Label
@@ -433,6 +468,16 @@ pub fn render_host_form(frame: &mut Frame, form: &HostForm, title: &str, theme: 
         ]);
         frame.render_widget(Paragraph::new(hint), rows[hint_row_idx]);
     }
+}
+
+/// The run of `count` form fields that fits in `capacity` slots and holds the
+/// `focused` one. Scrolls only once the focus passes the last slot.
+fn field_window(count: usize, focused: usize, capacity: usize) -> Range<usize> {
+    let capacity = capacity.clamp(1, count.max(1));
+    let start = focused
+        .saturating_sub(capacity - 1)
+        .min(count.saturating_sub(capacity));
+    start..start + capacity.min(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,6 +1051,150 @@ pub fn render_broadcast_picker(
             Span::styled(":cancel", Style::default().fg(theme.text_muted)),
         ])),
         hint_area,
+    );
+}
+
+/// Renders the passphrase prompt for an encrypted identity file.
+pub fn render_passphrase_prompt(frame: &mut Frame, prompt: &PassphrasePrompt, theme: &Theme) {
+    let input = if prompt.unlocking {
+        String::from("  Unlocking…")
+    } else {
+        masked(&prompt.field)
+    };
+    render_secret_prompt(
+        frame,
+        theme,
+        SecretPrompt {
+            title: format!(" Unlock SSH key — {} ", prompt.host_name),
+            detail: &prompt.key_path,
+            label: "  Passphrase (kept in memory until OmnySSH exits):",
+            input,
+            error: prompt.error.clone(),
+            action: ":unlock  ",
+        },
+    );
+}
+
+/// Renders the prompt for a login password a connection waits on.
+pub fn render_password_prompt(frame: &mut Frame, prompt: &PasswordPrompt, theme: &Theme) {
+    render_secret_prompt(
+        frame,
+        theme,
+        SecretPrompt {
+            title: format!(" SSH login — {} ", prompt.host_name),
+            detail: &prompt.login,
+            label: "  Password (kept in memory until OmnySSH exits):",
+            input: masked(&prompt.field),
+            error: prompt
+                .retry
+                .then(|| String::from("Permission denied, please try again."))
+                .or_else(|| {
+                    prompt
+                        .new_host_key
+                        .as_ref()
+                        .map(|key| format!("New host key recorded: {key}"))
+                }),
+            action: ":log in  ",
+        },
+    );
+}
+
+fn masked(field: &FormField) -> String {
+    format!("  {}| ", "*".repeat(field.value.chars().count()))
+}
+
+/// What a prompt for a secret shows; the secret itself only as stars.
+struct SecretPrompt<'a> {
+    title: String,
+    detail: &'a str,
+    label: &'a str,
+    input: String,
+    error: Option<String>,
+    /// The Enter hint, e.g. `":unlock  "`.
+    action: &'a str,
+}
+
+fn render_secret_prompt(frame: &mut Frame, theme: &Theme, prompt: SecretPrompt<'_>) {
+    // Six text rows plus the border, whatever the frame height.
+    let screen = frame.area();
+    let width = (screen.width * 7 / 10).max(60).min(screen.width);
+    let height = 8.min(screen.height);
+    let area = Rect::new(
+        screen.x + (screen.width - width) / 2,
+        screen.y + (screen.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(prompt.title)
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.accent));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1); 6])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("  {}", prompt.detail),
+            Style::default().fg(theme.text_secondary),
+        ))),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            prompt.label,
+            Style::default().fg(theme.text_primary),
+        ))),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            prompt.input,
+            Style::default()
+                .fg(theme.form_focused_fg)
+                .bg(theme.success_border)
+                .add_modifier(Modifier::BOLD),
+        ))),
+        rows[2],
+    );
+
+    if let Some(error) = prompt.error {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  {error}"),
+                Style::default().fg(theme.text_error),
+            ))),
+            rows[3],
+        );
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "  Enter",
+                Style::default()
+                    .fg(theme.text_success)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(prompt.action, Style::default().fg(theme.text_muted)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(theme.text_warning)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(":cancel", Style::default().fg(theme.text_muted)),
+        ])),
+        rows[5],
     );
 }
 
@@ -1685,4 +1874,103 @@ pub fn render_update(frame: &mut Frame, popup: &UpdatePopup, theme: &Theme) {
         ]),
     };
     frame.render_widget(Paragraph::new(hint), rows[2]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_form_window_always_holds_the_focused_field() {
+        for count in 1..=12 {
+            for capacity in 0..=13 {
+                for focused in 0..count {
+                    let window = field_window(count, focused, capacity);
+                    assert!(
+                        window.contains(&focused),
+                        "{count} fields, {capacity} slots, focus {focused}: {window:?}"
+                    );
+                    assert_eq!(window.len(), capacity.clamp(1, count));
+                    assert!(window.end <= count);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_form_window_scrolls_only_past_the_last_slot() {
+        // 12 fields at the 80x24 minimum leave room for 9.
+        assert_eq!(field_window(12, 0, 9), 0..9);
+        assert_eq!(field_window(12, 8, 9), 0..9);
+        assert_eq!(field_window(12, 9, 9), 1..10);
+        assert_eq!(field_window(12, 11, 9), 3..12);
+        assert_eq!(field_window(12, 11, 20), 0..12);
+    }
+
+    #[test]
+    fn the_passphrase_prompt_fits_the_smallest_screen() {
+        let prompt = PassphrasePrompt {
+            host_name: String::from("lab"),
+            key_path: String::from("/home/me/.ssh/test_key"),
+            field: FormField::with_value("secret"),
+            error: Some(String::from("wrong passphrase")),
+            unlocking: false,
+        };
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render_passphrase_prompt(frame, &prompt, &Theme::default()))
+            .expect("draw");
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for text in [
+            "Unlock SSH key — lab",
+            "/home/me/.ssh/test_key",
+            "******|",
+            "wrong passphrase",
+            "Enter:unlock",
+        ] {
+            assert!(screen.contains(text), "{text:?} is not on screen");
+        }
+        assert!(!screen.contains("secret"), "the passphrase is never drawn");
+    }
+
+    #[test]
+    fn the_password_prompt_names_the_login_and_hides_the_password() {
+        let prompt = PasswordPrompt {
+            request_id: 1,
+            host_name: String::from("udm"),
+            login: String::from("root@192.168.1.1"),
+            retry: true,
+            new_host_key: None,
+            field: FormField::with_value("hunter2"),
+        };
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| render_password_prompt(frame, &prompt, &Theme::default()))
+            .expect("draw");
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for text in [
+            "SSH login — udm",
+            "root@192.168.1.1",
+            "*******|",
+            "Permission denied, please try again.",
+            "Enter:log in",
+        ] {
+            assert!(screen.contains(text), "{text:?} is not on screen");
+        }
+        assert!(!screen.contains("hunter2"), "the password is never drawn");
+    }
 }

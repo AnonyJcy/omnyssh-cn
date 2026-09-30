@@ -254,3 +254,31 @@ fn an_include_cycle_terminates() {
 
     assert_eq!(names, ["a", "b", "local-direct"]);
 }
+
+/// ssh(1) reads an included file in place, so a general `ForwardAgent no` ahead of
+/// the `Include` still wins over a `yes` in a host the file brings in — and one in
+/// the included file wins over a host after it.
+#[test]
+fn a_general_forward_agent_no_reaches_across_include() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let ssh = tmp.path().join(".ssh");
+    fs::create_dir_all(&ssh).expect("create .ssh");
+    fs::write(ssh.join("hosts.conf"), "Host web\n    ForwardAgent yes\n").expect("write");
+    fs::write(ssh.join("defaults.conf"), "Host *\n    ForwardAgent no\n").expect("write");
+
+    let config = ssh.join("config");
+    fs::write(&config, "ForwardAgent no\nInclude hosts.conf\n").expect("write config");
+    let hosts = load_from_file(&config).expect("parse config");
+    assert!(
+        !hosts[0].forward_agent,
+        "the global no was lost across Include"
+    );
+
+    fs::write(
+        &config,
+        "Include defaults.conf\nHost db\n    ForwardAgent yes\n",
+    )
+    .expect("write config");
+    let hosts = load_from_file(&config).expect("parse config");
+    assert!(!hosts[0].forward_agent, "the included no was lost");
+}

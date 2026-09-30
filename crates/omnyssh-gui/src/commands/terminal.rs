@@ -63,3 +63,24 @@ pub fn terminal_close(state: State<'_, GuiState>, session_id: u64) -> Result<(),
     state.close_terminal(session_id);
     Ok(())
 }
+
+/// Paste into the focused terminal the way the webview's own Ctrl+Shift+V does.
+/// WebKitGTK binds that chord by its key symbol, so under a non-Latin layout it never
+/// fires and the frontend asks here instead. The other webviews bind it by the
+/// physical key and never need this.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_paste(webview: tauri::Webview) -> Result<(), CommandError> {
+    #[cfg(target_os = "linux")]
+    webview
+        .with_webview(|platform| {
+            use webkit2gtk::WebViewExt;
+            platform.inner().execute_editing_command("PasteAsPlainText");
+        })
+        .map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = webview;
+    Ok(())
+}

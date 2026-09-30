@@ -15,6 +15,7 @@ use crate::ui::theme::threshold_color;
 use crate::ui::theme::Theme;
 use omnyssh_core::event::{DetectedService, Metrics, ServiceKind};
 use omnyssh_core::ssh::client::{ConnectionStatus, MonitorMode};
+use omnyssh_core::ssh::tunnel::TunnelStatus;
 
 // ---------------------------------------------------------------------------
 // Card dimensions (kept in sync with dashboard.rs column calculation)
@@ -39,6 +40,16 @@ fn status_dot(status: Option<&ConnectionStatus>) -> (&'static str, Color) {
     }
 }
 
+/// Colour of the tunnel glyph; `None` means no tunnel is running.
+fn tunnel_color(status: Option<&TunnelStatus>, theme: &Theme) -> Color {
+    match status {
+        Some(TunnelStatus::Up) => theme.text_success,
+        Some(TunnelStatus::Connecting | TunnelStatus::Retrying(_)) => theme.text_warning,
+        Some(TunnelStatus::Failed(_)) => theme.text_error,
+        Some(TunnelStatus::Stopped) | None => theme.text_muted,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public render function
 // ---------------------------------------------------------------------------
@@ -58,6 +69,10 @@ pub struct CardData<'a> {
     pub monitoring: MonitorMode,
     /// Port the reachability probe dials, when it is not the host's own.
     pub monitor_port: Option<u16>,
+    /// Whether the host defines port forwards, and so has a tunnel to show.
+    pub has_forwards: bool,
+    /// The tunnel's status; `None` when it is not running.
+    pub tunnel: Option<&'a TunnelStatus>,
 }
 
 /// The reachability line shown in place of the metric rows. Naming the probed
@@ -95,11 +110,19 @@ pub fn render_card(
     let status = data.status;
     // ---- Border ----
     let (dot, dot_color) = status_dot(status);
+    // The tunnel glyph takes two more columns from the name.
+    let reserved = if data.has_forwards { 8 } else { 6 };
     let title = format!(
         " {} ",
-        truncate(host_name, rect.width.saturating_sub(6) as usize)
+        truncate(host_name, rect.width.saturating_sub(reserved) as usize)
     );
-    let title_right = format!(" {} ", dot);
+    let dot_span = Span::styled(format!(" {} ", dot), Style::default().fg(dot_color));
+    let title_right = if data.has_forwards {
+        let glyph = Style::default().fg(tunnel_color(data.tunnel, theme));
+        Line::from(vec![Span::styled(" ⇄", glyph), dot_span])
+    } else {
+        Line::from(dot_span)
+    };
 
     let border_color = if is_selected {
         theme.accent
@@ -125,10 +148,7 @@ pub fn render_card(
                 .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         )
-        .title_top(
-            Line::from(Span::styled(title_right, Style::default().fg(dot_color)))
-                .alignment(Alignment::Right),
-        )
+        .title_top(title_right.alignment(Alignment::Right))
         .borders(Borders::ALL)
         .border_type(border_type)
         .border_style(Style::default().fg(border_color));

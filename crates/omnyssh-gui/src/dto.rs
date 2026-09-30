@@ -12,6 +12,7 @@ use omnyssh_core::event::{
 use omnyssh_core::ssh::client::{ConnectionStatus, Host, HostSource, MonitorMode};
 use omnyssh_core::ssh::key_setup::KeySetupStep;
 use omnyssh_core::ssh::sftp::FileEntry;
+use omnyssh_core::ssh::tunnel::{LocalForward, TunnelStatus};
 use omnyssh_core::update::UpdateInfo;
 
 /// Host origin, mirrors `omnyssh_core::ssh::client::HostSource`.
@@ -69,6 +70,34 @@ pub struct HostDto {
     pub monitoring: MonitorModeDto,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor_port: Option<u16>,
+    pub local_forwards: Vec<LocalForwardDto>,
+    pub tunnel_autostart: bool,
+    pub forward_agent: bool,
+}
+
+/// One `ssh -L` rule (tech-gui.md §4.1): listen on `bindAddress:bindPort` here and
+/// reach `remoteHost:remotePort` as the host resolves it. No `bindAddress` means the
+/// loopback, as with ssh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalForwardDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_address: Option<String>,
+    pub bind_port: u16,
+    pub remote_host: String,
+    pub remote_port: u16,
+}
+
+/// Where a host's tunnel stands (tech-gui.md §4.1). Internally tagged on `kind`,
+/// like `ConnectionStatusDto`.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TunnelStatusDto {
+    Connecting,
+    Up,
+    Retrying { message: String },
+    Failed { message: String },
+    Stopped,
 }
 
 /// Inbound host form payload for `save_host` (tech-gui.md §4.1, Stage 4.1). Always
@@ -99,6 +128,18 @@ pub struct HostInputDto {
     pub monitoring: Option<MonitorModeDto>,
     #[serde(default)]
     pub monitor_port: Option<u16>,
+    pub local_forwards: Vec<LocalForwardDto>,
+    pub tunnel_autostart: bool,
+    pub forward_agent: bool,
+}
+
+/// What this desktop allows the tray (tech-gui.md §4.2 `set_tray_behavior`): an icon
+/// at all, and hiding a minimized window into it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TraySupportDto {
+    pub available: bool,
+    pub minimize: bool,
 }
 
 /// Live connection state for a host (tech-gui.md §4.1). Internally tagged so the
@@ -295,6 +336,60 @@ impl From<&Host> for HostDto {
             password_auth_disabled: host.password_auth_disabled,
             monitoring: host.monitoring.into(),
             monitor_port: host.monitor_port,
+            local_forwards: host.local_forwards.iter().map(Into::into).collect(),
+            tunnel_autostart: host.tunnel_autostart,
+            forward_agent: host.forward_agent,
+        }
+    }
+}
+
+impl From<&LocalForward> for LocalForwardDto {
+    fn from(forward: &LocalForward) -> Self {
+        Self {
+            bind_address: forward.bind_address.clone(),
+            bind_port: forward.bind_port,
+            remote_host: forward.remote_host.clone(),
+            remote_port: forward.remote_port,
+        }
+    }
+}
+
+impl From<LocalForwardDto> for LocalForward {
+    fn from(dto: LocalForwardDto) -> Self {
+        Self {
+            bind_address: dto.bind_address,
+            bind_port: dto.bind_port,
+            remote_host: dto.remote_host,
+            remote_port: dto.remote_port,
+        }
+    }
+}
+
+/// Rejects a rule `hosts.toml` could not read back. Rules are stored in the `ssh -L`
+/// notation, so one that does not survive it — a zero port, an empty host — would be
+/// saved, then dropped with a warning on the next load.
+pub fn check_forwards(forwards: &[LocalForwardDto]) -> Result<(), String> {
+    for dto in forwards {
+        let forward = LocalForward::from(dto.clone());
+        if forward.to_string().parse::<LocalForward>().as_ref() != Ok(&forward) {
+            return Err(format!("'{forward}' is not a valid port forward"));
+        }
+    }
+    Ok(())
+}
+
+impl From<&TunnelStatus> for TunnelStatusDto {
+    fn from(status: &TunnelStatus) -> Self {
+        match status {
+            TunnelStatus::Connecting => Self::Connecting,
+            TunnelStatus::Up => Self::Up,
+            TunnelStatus::Retrying(message) => Self::Retrying {
+                message: message.clone(),
+            },
+            TunnelStatus::Failed(message) => Self::Failed {
+                message: message.clone(),
+            },
+            TunnelStatus::Stopped => Self::Stopped,
         }
     }
 }
@@ -317,6 +412,8 @@ impl From<HostInputDto> for Host {
             user: dto.user,
             port: dto.port,
             identity_file: non_empty(dto.identity_file),
+            // Read from `~/.ssh/config` only; `save_host` carries it over.
+            identities_only: false,
             password: non_empty(dto.password),
             proxy_jump: non_empty(dto.proxy_jump),
             tags: dto.tags,
@@ -329,6 +426,9 @@ impl From<HostInputDto> for Host {
             monitor_port: dto
                 .monitor_port
                 .filter(|&p| p != 0 && monitoring == MonitorMode::TcpPort),
+            local_forwards: dto.local_forwards.into_iter().map(Into::into).collect(),
+            tunnel_autostart: dto.tunnel_autostart,
+            forward_agent: dto.forward_agent,
             key_setup_date: None,
             password_auth_disabled: None,
         }
@@ -578,6 +678,9 @@ mod tests {
             notes: Some("primary".to_string()),
             monitoring: None,
             monitor_port: None,
+            local_forwards: vec![],
+            tunnel_autostart: false,
+            forward_agent: false,
         }
     }
 
@@ -631,6 +734,9 @@ mod tests {
             notes: Some(String::new()),
             monitoring: None,
             monitor_port: None,
+            local_forwards: vec![],
+            tunnel_autostart: false,
+            forward_agent: false,
         });
         assert!(host.identity_file.is_none());
         assert!(host.password.is_none());
@@ -953,6 +1059,105 @@ mod tests {
         assert_eq!(
             json,
             r#"{"sessionId":3,"transferId":7,"done":512,"total":2048}"#
+        );
+    }
+
+    fn rule(bind: Option<&str>, port: u16, host: &str, hostport: u16) -> LocalForwardDto {
+        LocalForwardDto {
+            bind_address: bind.map(str::to_string),
+            bind_port: port,
+            remote_host: host.to_string(),
+            remote_port: hostport,
+        }
+    }
+
+    #[test]
+    fn host_dto_carries_forwards_and_autostart_but_still_no_secret() {
+        let mut host = host_with_secret();
+        host.local_forwards = vec![
+            "9443:127.0.0.1:9443".parse().expect("rule"),
+            "[::1]:8080:db:5432".parse().expect("rule"),
+        ];
+        host.tunnel_autostart = true;
+        let json = serde_json::to_value(HostDto::from(&host)).expect("serialise HostDto");
+        assert_eq!(
+            json["localForwards"],
+            serde_json::json!([
+                {"bindPort": 9443, "remoteHost": "127.0.0.1", "remotePort": 9443},
+                {"bindAddress": "::1", "bindPort": 8080, "remoteHost": "db", "remotePort": 5432},
+            ])
+        );
+        assert_eq!(json["tunnelAutostart"], true);
+        let text = json.to_string();
+        assert!(
+            !text.contains("s3cr3t") && !text.contains("id_ed25519"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn host_input_forwards_reach_the_saved_host() {
+        let mut input = full_input();
+        input.local_forwards = vec![rule(None, 5432, "localhost", 5432)];
+        input.tunnel_autostart = true;
+        let host = Host::from(input);
+        assert_eq!(host.local_forwards[0].to_string(), "5432:localhost:5432");
+        assert!(host.tunnel_autostart);
+    }
+
+    #[test]
+    fn forward_agent_crosses_both_ways() {
+        let mut input = full_input();
+        input.forward_agent = true;
+        let host = Host::from(input);
+        assert!(host.forward_agent);
+        let json = serde_json::to_value(HostDto::from(&host)).expect("serialise HostDto");
+        assert_eq!(json["forwardAgent"], true);
+    }
+
+    #[test]
+    fn check_forwards_keeps_only_rules_hosts_toml_reads_back() {
+        assert!(check_forwards(&[
+            rule(None, 9443, "127.0.0.1", 9443),
+            rule(Some("::1"), 8080, "fe80::1", 80),
+            rule(Some("*"), 8080, "web", 80),
+            rule(Some("0.0.0.0"), 8080, "web", 80),
+        ])
+        .is_ok());
+        for bad in [
+            rule(None, 0, "web", 80),
+            rule(None, 8080, "web", 0),
+            rule(None, 8080, "", 80),
+            rule(None, 8080, "[web", 80),
+        ] {
+            assert!(
+                check_forwards(std::slice::from_ref(&bad)).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tunnel_status_is_tagged_on_kind() {
+        let wire = |status: TunnelStatus| {
+            serde_json::to_value(TunnelStatusDto::from(&status)).expect("serialise")
+        };
+        assert_eq!(wire(TunnelStatus::Up), serde_json::json!({"kind": "up"}));
+        assert_eq!(
+            wire(TunnelStatus::Connecting),
+            serde_json::json!({"kind": "connecting"})
+        );
+        assert_eq!(
+            wire(TunnelStatus::Stopped),
+            serde_json::json!({"kind": "stopped"})
+        );
+        assert_eq!(
+            wire(TunnelStatus::Retrying(String::from("connection lost"))),
+            serde_json::json!({"kind": "retrying", "message": "connection lost"})
+        );
+        assert_eq!(
+            wire(TunnelStatus::Failed(String::from("port 80 in use"))),
+            serde_json::json!({"kind": "failed", "message": "port 80 in use"})
         );
     }
 }
