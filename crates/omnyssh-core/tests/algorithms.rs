@@ -157,3 +157,46 @@ async fn a_server_with_only_aes128_gcm_connects() {
     };
     runs_a_command("aes128-gcm", preferred).await;
 }
+
+/// Logs in to a server offering only `preferred`, which is none of ours, and
+/// returns why it failed.
+async fn fails(name: &str, preferred: Preferred) -> String {
+    isolate_home();
+    let addr = serve(preferred).await;
+    let e = SshSession::connect(&host(name, addr))
+        .await
+        .err()
+        .expect("no algorithm in common");
+    format!("{e:#}")
+}
+
+/// A server past OpenSSH 9.6 lists strict KEX markers along with its methods:
+/// the error names the methods, not a marker.
+#[tokio::test]
+async fn a_key_exchange_mismatch_names_the_servers_methods() {
+    let preferred = Preferred {
+        kex: Cow::Borrowed(&[
+            kex::DH_G1_SHA1,
+            kex::EXTENSION_SUPPORT_AS_SERVER,
+            kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+        ]),
+        ..Preferred::DEFAULT
+    };
+    assert_eq!(
+        fails("kex-mismatch", preferred).await,
+        "SSH connection failed: no common key exchange method; \
+         the server offers diffie-hellman-group1-sha1"
+    );
+}
+
+#[tokio::test]
+async fn a_cipher_mismatch_names_the_servers_ciphers() {
+    let preferred = Preferred {
+        cipher: Cow::Borrowed(&[cipher::AES_128_CBC]),
+        ..Preferred::DEFAULT
+    };
+    assert_eq!(
+        fails("cipher-mismatch", preferred).await,
+        "SSH connection failed: no common cipher; the server offers aes128-cbc"
+    );
+}

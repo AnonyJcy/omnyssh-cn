@@ -92,7 +92,8 @@ impl Link {
             .clone()
     }
 
-    /// The error for a handshake that failed: a turned-down host key says why.
+    /// The error for a handshake that failed: a turned-down host key says why,
+    /// and so does a server with no algorithm in common.
     fn connect_error(&self, e: russh::Error) -> anyhow::Error {
         let refusal = self
             .refusal
@@ -101,8 +102,56 @@ impl Link {
             .take();
         match (e, refusal) {
             (russh::Error::UnknownKey, Some(why)) => Refused(why).into(),
+            (russh::Error::NoCommonAlgo { kind, theirs, .. }, _) => {
+                anyhow!(no_common_algorithm(&kind, &theirs))
+            }
             (e, _) => anyhow::Error::new(e).context("SSH connection failed"),
         }
+    }
+}
+
+/// How much of a server's algorithm list an error quotes.
+const OFFER_MAX: usize = 256;
+
+/// Names the kind of algorithm a server has none in common of, and what it
+/// offers instead. No ':' after the first, where frontends cut. The list comes
+/// from the server, so only the characters algorithm names use are kept, and
+/// only so much of it.
+fn no_common_algorithm(kind: &russh::AlgorithmKind, theirs: &[String]) -> String {
+    let what = match kind {
+        russh::AlgorithmKind::Kex => "key exchange method",
+        russh::AlgorithmKind::Key => "host key type",
+        russh::AlgorithmKind::Cipher => "cipher",
+        russh::AlgorithmKind::Mac => "MAC",
+        russh::AlgorithmKind::Compression => "compression",
+    };
+    let mut offer = String::new();
+    // The ext-info and strict KEX markers name no method.
+    for name in theirs
+        .iter()
+        .filter(|name| !name.starts_with("ext-info-") && !name.starts_with("kex-strict-"))
+    {
+        let name: String = name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || "@.-_+".contains(*c))
+            .take(OFFER_MAX)
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        if !offer.is_empty() && offer.len() + name.len() > OFFER_MAX {
+            offer.push_str(", ...");
+            break;
+        }
+        if !offer.is_empty() {
+            offer.push_str(", ");
+        }
+        offer.push_str(&name);
+    }
+    if offer.is_empty() {
+        format!("SSH connection failed: no common {what}")
+    } else {
+        format!("SSH connection failed: no common {what}; the server offers {offer}")
     }
 }
 
@@ -2074,5 +2123,45 @@ mod tests {
             let skipped = refused_before(&path, &turned_down).await;
             assert_eq!(skipped, *name == "id_ed25519", "{name}");
         }
+    }
+
+    #[test]
+    fn a_missing_algorithm_is_named_with_the_offer() {
+        let offer = [String::from("aes128-gcm@openssh.com")];
+        assert_eq!(
+            no_common_algorithm(&russh::AlgorithmKind::Cipher, &offer),
+            "SSH connection failed: no common cipher; the server offers aes128-gcm@openssh.com"
+        );
+        assert_eq!(
+            no_common_algorithm(&russh::AlgorithmKind::Mac, &[]),
+            "SSH connection failed: no common MAC"
+        );
+    }
+
+    #[test]
+    fn the_quoted_offer_is_cleaned_and_bounded() {
+        let offer = [
+            "ecdh-sha2-nistp256",
+            "ext-info-s",
+            "kex-strict-s-v00@openssh.com",
+            "odd\u{1b}[2J: name\n",
+        ]
+        .map(String::from);
+        let message = no_common_algorithm(&russh::AlgorithmKind::Kex, &offer);
+        assert_eq!(
+            message,
+            "SSH connection failed: no common key exchange method; \
+             the server offers ecdh-sha2-nistp256, odd2Jname"
+        );
+
+        let long = vec!["x".repeat(100); 10];
+        let message = no_common_algorithm(&russh::AlgorithmKind::Key, &long);
+        assert!(message.len() < 100 + OFFER_MAX, "{message}");
+        assert!(message.ends_with(", ..."), "{message}");
+        assert_eq!(message.matches(':').count(), 1, "{message}");
+
+        let huge = [String::from("y").repeat(10_000)];
+        let message = no_common_algorithm(&russh::AlgorithmKind::Key, &huge);
+        assert!(message.len() < 100 + OFFER_MAX, "{message}");
     }
 }
