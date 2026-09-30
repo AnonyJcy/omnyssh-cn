@@ -8,8 +8,8 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use russh::keys::key::{self, PublicKey};
 use russh::keys::known_hosts::{known_host_keys_path, learn_known_hosts_path};
+use russh::keys::{Algorithm, EcdsaCurve, HashAlg, PublicKey};
 
 /// What `known_hosts` says about the key a server offered.
 pub(crate) enum Verdict {
@@ -69,7 +69,7 @@ fn check_in(files: &[PathBuf], host: &str, port: u16, key: &PublicKey) -> Verdic
             Ok(saved) => saved,
             Err(e) => return Verdict::Unreadable(file.clone(), e),
         };
-        if saved.contains(key) {
+        if saved.iter().any(|k| k.key_data() == key.key_data()) {
             return Verdict::Known;
         }
         if saved.iter().any(|k| same_type(k, key)) {
@@ -104,46 +104,63 @@ pub(crate) fn learn(host: &str, port: u16, key: &PublicKey) -> Result<(), russh:
     learn_known_hosts_path(host, port, key, path)
 }
 
+/// The host key algorithms asked for when nothing is pinned: russh 0.46's list,
+/// which OmnySSH shipped with. P-384 is left out, and so is `ssh-rsa` (SHA-1).
+const KEY_ORDER: &[Algorithm] = &[
+    Algorithm::Ed25519,
+    Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP256,
+    },
+    Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP521,
+    },
+    Algorithm::Rsa {
+        hash: Some(HashAlg::Sha256),
+    },
+    Algorithm::Rsa {
+        hash: Some(HashAlg::Sha512),
+    },
+];
+
+const P384: Algorithm = Algorithm::Ecdsa {
+    curve: EcdsaCurve::NistP384,
+};
+
 /// Host key algorithms for `host:port`, those of the keys saved for it first,
 /// as ssh(1) orders them: a server with several keys then shows the pinned one
 /// rather than one of another type that would be taken as new.
-pub(crate) fn preferred(host: &str, port: u16) -> Cow<'static, [key::Name]> {
+pub(crate) fn preferred(host: &str, port: u16) -> Cow<'static, [Algorithm]> {
     preferred_in(&files(), host, port)
 }
 
-fn preferred_in(files: &[PathBuf], host: &str, port: u16) -> Cow<'static, [key::Name]> {
-    let default = russh::Preferred::DEFAULT.key;
+fn preferred_in(files: &[PathBuf], host: &str, port: u16) -> Cow<'static, [Algorithm]> {
     let Some(saved) = files
         .iter()
         .filter_map(|file| saved_keys(file, host, port).ok())
         .find(|saved| !saved.is_empty())
     else {
-        return default;
+        return Cow::Borrowed(KEY_ORDER);
     };
-    // P-384 verifies fine but is missing from russh's list, so it is asked for
-    // only where it is pinned.
-    let (mut order, rest): (Vec<key::Name>, Vec<key::Name>) = default
+    // P-384 verifies fine but is missing from the list, so it is asked for only
+    // where it is pinned.
+    let (mut order, rest): (Vec<Algorithm>, Vec<Algorithm>) = KEY_ORDER
         .iter()
-        .copied()
-        .chain([key::ECDSA_SHA2_NISTP384])
+        .cloned()
+        .chain([P384])
         .partition(|algo| saved.iter().any(|k| signs_with(k, algo)));
-    order.extend(
-        rest.into_iter()
-            .filter(|algo| *algo != key::ECDSA_SHA2_NISTP384),
-    );
+    order.extend(rest.into_iter().filter(|algo| *algo != P384));
     Cow::Owned(order)
 }
 
-/// An RSA key's name follows the signature hash it was negotiated with, not the
-/// key itself.
+/// Types compare by key: an RSA key is one type whatever hash it signs with.
 fn same_type(a: &PublicKey, b: &PublicKey) -> bool {
-    matches!((a, b), (PublicKey::RSA { .. }, PublicKey::RSA { .. })) || a.name() == b.name()
+    a.algorithm() == b.algorithm()
 }
 
-fn signs_with(key: &PublicKey, algo: &key::Name) -> bool {
-    match key {
-        PublicKey::RSA { .. } => *algo == key::RSA_SHA2_256 || *algo == key::RSA_SHA2_512,
-        _ => key.name() == algo.0,
+fn signs_with(key: &PublicKey, algo: &Algorithm) -> bool {
+    match algo {
+        Algorithm::Rsa { .. } => key.algorithm().is_rsa(),
+        _ => key.algorithm() == *algo,
     }
 }
 
@@ -194,11 +211,16 @@ pub(crate) fn unreadable_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use russh::keys::key::KeyPair;
+    use russh::keys::ssh_key::private::RsaKeypair;
+    use russh::keys::PrivateKey;
     use std::io::Write;
 
-    fn pubkey(pair: &KeyPair) -> PublicKey {
-        pair.clone_public_key().expect("public key")
+    fn ed25519() -> PublicKey {
+        let mut rng = russh::keys::key::safe_rng();
+        PrivateKey::random(&mut rng, Algorithm::Ed25519)
+            .expect("ed25519 key")
+            .public_key()
+            .clone()
     }
 
     fn write(file: &Path, lines: &[String]) {
@@ -209,28 +231,27 @@ mod tests {
     }
 
     fn line(host: &str, key: &PublicKey) -> String {
-        use russh::keys::PublicKeyBase64;
-        format!("{host} {} {}", key.name(), key.public_key_base64())
+        format!("{host} {}", key.to_openssh().expect("openssh line"))
     }
 
     #[test]
     fn a_saved_key_is_known_and_a_different_one_changed() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("known_hosts");
-        let (server, other) = (KeyPair::generate_ed25519(), KeyPair::generate_ed25519());
-        write(&file, &[line("10.0.0.5", &pubkey(&server))]);
+        let (server, other) = (ed25519(), ed25519());
+        write(&file, &[line("10.0.0.5", &server)]);
         let files = [file.clone()];
 
         assert!(matches!(
-            check_in(&files, "10.0.0.5", 22, &pubkey(&server)),
+            check_in(&files, "10.0.0.5", 22, &server),
             Verdict::Known
         ));
-        match check_in(&files, "10.0.0.5", 22, &pubkey(&other)) {
+        match check_in(&files, "10.0.0.5", 22, &other) {
             Verdict::Changed(path) => assert_eq!(path, file),
             _ => panic!("expected a changed key"),
         }
         assert!(matches!(
-            check_in(&files, "10.0.0.6", 22, &pubkey(&other)),
+            check_in(&files, "10.0.0.6", 22, &other),
             Verdict::Unknown
         ));
     }
@@ -239,40 +260,34 @@ mod tests {
     fn a_stale_line_next_to_the_right_one_is_no_refusal() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("known_hosts");
-        let (old, new) = (KeyPair::generate_ed25519(), KeyPair::generate_ed25519());
-        write(
-            &file,
-            &[line("vm", &pubkey(&old)), line("vm", &pubkey(&new))],
-        );
-        assert!(matches!(
-            check_in(&[file], "vm", 22, &pubkey(&new)),
-            Verdict::Known
-        ));
+        let (old, new) = (ed25519(), ed25519());
+        write(&file, &[line("vm", &old), line("vm", &new)]);
+        assert!(matches!(check_in(&[file], "vm", 22, &new), Verdict::Known));
     }
 
     #[test]
     fn the_first_file_with_the_offered_type_decides() {
         let dir = tempfile::tempdir().unwrap();
         let (primary, legacy) = (dir.path().join("a"), dir.path().join("b"));
-        let (server, stale) = (KeyPair::generate_ed25519(), KeyPair::generate_ed25519());
+        let (server, stale) = (ed25519(), ed25519());
         let files = [primary.clone(), legacy.clone()];
 
         // The legacy pin still refuses a key nobody saved elsewhere...
-        write(&legacy, &[line("vm", &pubkey(&stale))]);
-        match check_in(&files, "vm", 22, &pubkey(&server)) {
+        write(&legacy, &[line("vm", &stale)]);
+        match check_in(&files, "vm", 22, &server) {
             Verdict::Changed(path) => assert_eq!(path, legacy),
             _ => panic!("expected the legacy pin to refuse"),
         }
         // ...until the key is saved in the primary file, which is read first.
-        write(&primary, &[line("vm", &pubkey(&server))]);
+        write(&primary, &[line("vm", &server)]);
         assert!(matches!(
-            check_in(&files, "vm", 22, &pubkey(&server)),
+            check_in(&files, "vm", 22, &server),
             Verdict::Known
         ));
         // A stale primary pin is never overruled by the legacy file.
-        write(&primary, &[line("vm", &pubkey(&stale))]);
-        write(&legacy, &[line("vm", &pubkey(&server))]);
-        match check_in(&files, "vm", 22, &pubkey(&server)) {
+        write(&primary, &[line("vm", &stale)]);
+        write(&legacy, &[line("vm", &server)]);
+        match check_in(&files, "vm", 22, &server) {
             Verdict::Changed(path) => assert_eq!(path, primary),
             _ => panic!("expected the primary pin to refuse"),
         }
@@ -280,9 +295,8 @@ mod tests {
 
     #[test]
     fn no_home_refuses_rather_than_trust_anything() {
-        let key = pubkey(&KeyPair::generate_ed25519());
         assert!(matches!(
-            check_in(&[], "vm", 22, &key),
+            check_in(&[], "vm", 22, &ed25519()),
             Verdict::Unreadable(..)
         ));
     }
@@ -291,15 +305,15 @@ mod tests {
     fn a_mixed_case_name_finds_the_pin_ssh_wrote_in_lower_case() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("known_hosts");
-        let (server, other) = (KeyPair::generate_ed25519(), KeyPair::generate_ed25519());
-        write(&file, &[line("build.corp.lan", &pubkey(&server))]);
+        let (server, other) = (ed25519(), ed25519());
+        write(&file, &[line("build.corp.lan", &server)]);
         let files = [file.clone()];
         assert!(matches!(
-            check_in(&files, "Build.Corp.lan", 22, &pubkey(&server)),
+            check_in(&files, "Build.Corp.lan", 22, &server),
             Verdict::Known
         ));
         assert!(matches!(
-            check_in(&files, "Build.Corp.lan", 22, &pubkey(&other)),
+            check_in(&files, "Build.Corp.lan", 22, &other),
             Verdict::Changed(_)
         ));
     }
@@ -310,10 +324,7 @@ mod tests {
         let file = dir.path().join("known_hosts");
         write(&file, &[]);
         let files = [file.clone()];
-        assert_eq!(
-            preferred_in(&files, "vm", 22),
-            russh::Preferred::DEFAULT.key
-        );
+        assert_eq!(preferred_in(&files, "vm", 22), KEY_ORDER);
 
         // ssh(1) before 8.5 pinned ECDSA, which then has to come before Ed25519.
         let ecdsa = russh::keys::parse_public_key_base64(
@@ -323,8 +334,11 @@ mod tests {
         .expect("ecdsa key");
         write(&file, &[line("vm", &ecdsa)]);
         let order = preferred_in(&files, "vm", 22);
-        assert_eq!(order.first(), Some(&key::ECDSA_SHA2_NISTP256));
-        assert_eq!(order.len(), russh::Preferred::DEFAULT.key.len());
+        let p256 = Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        };
+        assert_eq!(order.first(), Some(&p256));
+        assert_eq!(order.len(), KEY_ORDER.len());
     }
 
     #[test]
@@ -339,17 +353,26 @@ mod tests {
         .expect("p384 key");
         write(&file, &[line("vm", &p384)]);
         let order = preferred_in(&[file], "vm", 22);
-        assert_eq!(order.first(), Some(&key::ECDSA_SHA2_NISTP384));
-        assert_eq!(order.len(), russh::Preferred::DEFAULT.key.len() + 1);
+        assert_eq!(order.first(), Some(&P384));
+        assert_eq!(order.len(), KEY_ORDER.len() + 1);
+    }
+
+    #[test]
+    fn nothing_pinned_asks_for_no_p384_and_no_sha1() {
+        assert!(!KEY_ORDER.contains(&P384));
+        assert!(!KEY_ORDER.contains(&Algorithm::Rsa { hash: None }));
     }
 
     #[test]
     fn an_rsa_pin_holds_whatever_hash_was_negotiated() {
-        let rsa = || pubkey(&KeyPair::generate_rsa(2048, key::SignatureHash::SHA2_512).unwrap());
+        let rsa = || {
+            let mut rng = russh::keys::key::safe_rng();
+            let pair = RsaKeypair::random(&mut rng, 2048).expect("rsa key");
+            PrivateKey::from(pair).public_key().clone()
+        };
         let pinned = rsa();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("known_hosts");
-        // Parsed back from the file, the key carries another hash name.
         write(&file, &[line("vm", &pinned)]);
         let files = [file.clone()];
         assert!(matches!(
@@ -378,16 +401,17 @@ mod tests {
         );
     }
 
-    /// The old file is where russh-keys itself pins keys on Windows.
+    /// The old file, where russh-keys pinned keys on Windows, is still read.
     #[cfg(windows)]
     #[test]
-    fn the_legacy_file_is_the_one_russh_wrote() {
+    fn the_legacy_file_is_still_read() {
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("USERPROFILE", home.path());
-        let key = pubkey(&KeyPair::generate_ed25519());
-        russh::keys::known_hosts::learn_known_hosts("vm", 22, &key).expect("learn");
+        let key = ed25519();
         let legacy = legacy_path().expect("legacy path");
-        assert!(legacy.is_file(), "{} was not written", legacy.display());
+        assert_eq!(legacy, home.path().join("ssh").join("known_hosts"));
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        write(&legacy, &[line("vm", &key)]);
         assert_eq!(path(), Some(home.path().join(".ssh").join("known_hosts")));
         assert!(matches!(check("vm", 22, &key), Verdict::Known));
     }
