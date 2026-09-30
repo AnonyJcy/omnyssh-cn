@@ -7,6 +7,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## Unreleased
+
+### Bug Fixes
+- **Servers that take only NIST key exchange or aes128-gcm connect, such as Cisco RoomOS video devices.** A server whose key exchange methods include no curve25519 or Diffie-Hellman group 14/16, or whose only cipher is aes128-gcm, failed with "No common algorithm". OmnySSH now also offers ecdh-sha2-nistp256, -nistp384 and -nistp521 key exchange and the aes128-gcm@openssh.com cipher, which macOS's own `ssh` tries first. A host whose only host key is ECDSA P-384, as on a RoomOS device set to ECDSA, now connects the first time too; before, that key was only accepted once it was saved in `known_hosts`. The new key exchange methods and host key type come after the ones offered before, so a server that already worked keeps its key exchange and host key. This needed a newer release of the SSH library (russh 0.63), and building from source with `cargo install omnyssh` now needs Rust 1.89 or later.
+- **A server with no algorithm in common says which kind is missing and what it offers.** The error read "No common algorithm", and a key exchange mismatch even "Unknown algorithm", without saying whether the key exchange, host key, cipher or MAC was the problem, so there was nothing to go on. It now reads, for example, "no common cipher; the server offers aes128-cbc". Servers that offer only methods OmnySSH leaves out on purpose, such as SHA-1 Diffie-Hellman or CBC ciphers, still do not connect.
+- **macOS: a host on your local network that fails with "No route to host" says macOS may be blocking it.** macOS keeps an app away from devices on the local network until you allow it, and a blocked connection fails at once with "No route to host (os error 65)", while the router usually stays reachable because it is also your DNS server, so it looked like a fault on that one machine. The error now adds that macOS may be blocking the app and where to allow it: System Settings, Privacy & Security, Local Network, then reopen the app. The desktop app also now carries the explanation macOS shows when it asks for that permission. The terminal app needs the permission for the terminal it runs in; Apple's Terminal has it already.
+- **A terminal the server closes right after login stays open and shows why.** A Synology NAS gives a shell only to administrators: any other account logs in, gets DSM's "Permission denied, please try again." and the session ends. `ssh` shows that message, but OmnySSH closed the tab the moment the session ended, so the terminal seemed to vanish right after the password while file sessions to the same NAS worked. In both apps, a terminal tab that showed anything now stays open when the remote side ends its session, including after `exit` or a dropped connection, with "[Connection closed. Press Enter to close this tab.]" under the last output. Enter or Esc closes it, and it takes no other input. A terminal that fails before showing anything still closes, with the reason in the status bar. The desktop app could also drop the last lines a session printed just before it ended; they now always arrive.
+
+---
+
 ## 1.1.4 — 2026-09-28
 
 ### Bug Fixes
