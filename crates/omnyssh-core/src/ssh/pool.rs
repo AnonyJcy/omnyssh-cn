@@ -26,7 +26,7 @@ use crate::ssh::metrics::{
     parse_ram_free, parse_ram_vmstat, parse_top_processes, parse_uptime,
 };
 use crate::ssh::password;
-use crate::ssh::session::{passphrase_required, waiting_login, SshSession};
+use crate::ssh::session::{dial_error, passphrase_required, waiting_login, SshSession};
 
 // ---------------------------------------------------------------------------
 // Backoff schedule
@@ -187,7 +187,7 @@ async fn run_tcp_poller(
 
         let status = match time::timeout(TCP_PROBE_TIMEOUT, TcpStream::connect(&addr)).await {
             Ok(Ok(_)) => ConnectionStatus::Connected,
-            Ok(Err(e)) => ConnectionStatus::Failed(e.to_string()),
+            Ok(Err(e)) => ConnectionStatus::Failed(dial_error(&e)),
             Err(_) => ConnectionStatus::Failed(format!("no answer from {addr}")),
         };
         let reachable = matches!(status, ConnectionStatus::Connected);

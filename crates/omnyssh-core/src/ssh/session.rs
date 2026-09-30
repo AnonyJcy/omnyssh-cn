@@ -105,8 +105,27 @@ impl Link {
             (russh::Error::NoCommonAlgo { kind, theirs, .. }, _) => {
                 anyhow!(no_common_algorithm(&kind, &theirs))
             }
+            #[cfg(target_os = "macos")]
+            (russh::Error::IO(e), _) if e.kind() == std::io::ErrorKind::HostUnreachable => {
+                anyhow!("SSH connection failed: {}", dial_error(&e))
+            }
             (e, _) => anyhow::Error::new(e).context("SSH connection failed"),
         }
+    }
+}
+
+/// Why a TCP dial failed. On macOS "No route to host" also comes, at once, from
+/// Local Network privacy blocking the app, so it says that may be it; the TUI
+/// needs the grant for the terminal it runs in. Short and with no ':', since the
+/// TUI shows one cut line.
+pub(crate) fn dial_error(e: &std::io::Error) -> String {
+    if cfg!(target_os = "macos") && e.kind() == std::io::ErrorKind::HostUnreachable {
+        format!(
+            "{e}; Local Network privacy may be blocking this app or its terminal \
+             (System Settings > Privacy & Security > Local Network)"
+        )
+    } else {
+        e.to_string()
     }
 }
 
@@ -2122,6 +2141,60 @@ mod tests {
             let turned_down = [key.public_key().clone()];
             let skipped = refused_before(&path, &turned_down).await;
             assert_eq!(skipped, *name == "id_ed25519", "{name}");
+        }
+    }
+
+    #[test]
+    fn only_an_unreachable_host_hints_at_local_network_access() {
+        use std::io::{Error, ErrorKind};
+
+        let others = [
+            Error::from(ErrorKind::ConnectionRefused),
+            Error::from(ErrorKind::TimedOut),
+            Error::from(ErrorKind::NetworkUnreachable),
+        ];
+        for e in others {
+            assert_eq!(dial_error(&e), e.to_string());
+        }
+        let (_, link) = known_hosts_handler(&Host::default(), false);
+        let refused = link.connect_error(russh::Error::IO(ErrorKind::ConnectionRefused.into()));
+        assert_eq!(
+            format!("{refused:#}"),
+            format!(
+                "SSH connection failed: {}",
+                Error::from(ErrorKind::ConnectionRefused)
+            )
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            // EHOSTUNREACH, what a Local Network refusal comes back as.
+            let e = Error::from_raw_os_error(65);
+            let message = dial_error(&e);
+            assert!(
+                message.starts_with("No route to host (os error 65); "),
+                "{message}"
+            );
+            assert!(
+                message.contains("Privacy & Security > Local Network"),
+                "{message}"
+            );
+            assert!(message.contains("this app or its terminal"), "{message}");
+            assert!(!message.contains(':'), "{message}");
+            // EHOSTDOWN is a host that is off.
+            let down = Error::from_raw_os_error(64);
+            assert_eq!(dial_error(&down), down.to_string());
+            // The dial of an SSH connection says it too, after the reason.
+            let e = link.connect_error(russh::Error::IO(e));
+            assert_eq!(
+                format!("{e:#}"),
+                format!("SSH connection failed: {message}")
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let e = Error::from(ErrorKind::HostUnreachable);
+            assert_eq!(dial_error(&e), e.to_string());
         }
     }
 
