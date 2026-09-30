@@ -701,15 +701,20 @@ pub(crate) async fn connect_budget(host: &Host) -> Duration {
     (CONNECT_TIMEOUT + AGENT_BUDGET) * (hops as u32 + 1)
 }
 
-// The algorithms offered, spelled out as 1.1.4 shipped them (russh 0.46's
-// defaults) rather than taken from russh, whose defaults change between
-// releases: later ones drop the SHA-1 MACs that some network gear still needs.
+// The algorithms offered, spelled out from 1.1.4's (russh 0.46's defaults)
+// rather than taken from russh, whose defaults change between releases: later
+// ones drop the SHA-1 MACs that some network gear still needs.
 
 const KEX_ORDER: &[kex::Name] = &[
     kex::CURVE25519,
     kex::CURVE25519_PRE_RFC_8731,
     kex::DH_G16_SHA512,
     kex::DH_G14_SHA256,
+    // Last, so a server that works without them negotiates as it always did.
+    // Some take nothing else (Cisco RoomOS).
+    kex::ECDH_SHA2_NISTP256,
+    kex::ECDH_SHA2_NISTP384,
+    kex::ECDH_SHA2_NISTP521,
     kex::EXTENSION_SUPPORT_AS_CLIENT,
     kex::EXTENSION_SUPPORT_AS_SERVER,
     kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
@@ -719,6 +724,8 @@ const KEX_ORDER: &[kex::Name] = &[
 const CIPHER_ORDER: &[cipher::Name] = &[
     cipher::CHACHA20_POLY1305,
     cipher::AES_256_GCM,
+    // All some servers take (Cisco RoomOS).
+    cipher::AES_128_GCM,
     cipher::AES_256_CTR,
     cipher::AES_192_CTR,
     cipher::AES_128_CTR,

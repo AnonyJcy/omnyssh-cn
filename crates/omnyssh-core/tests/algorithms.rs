@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{self, Auth, ChannelOpenHandle, Msg, Session};
-use russh::{cipher, compression, mac, Channel, ChannelId, Preferred};
+use russh::{cipher, compression, kex, mac, Channel, ChannelId, Preferred};
 use tokio::net::TcpListener;
 
 use omnyssh_core::ssh::client::Host;
@@ -125,4 +125,35 @@ async fn a_server_that_always_compresses_connects() {
         ..Preferred::DEFAULT
     };
     runs_a_command("zlib", preferred).await;
+}
+
+/// Cisco RoomOS takes no key exchange but NIST ECDH, and strict KEX as OpenSSH
+/// 9.6 and later do it.
+#[tokio::test]
+async fn a_server_with_only_nist_ecdh_connects() {
+    for curve in [
+        kex::ECDH_SHA2_NISTP256,
+        kex::ECDH_SHA2_NISTP384,
+        kex::ECDH_SHA2_NISTP521,
+    ] {
+        let preferred = Preferred {
+            kex: Cow::Owned(vec![
+                curve,
+                kex::EXTENSION_SUPPORT_AS_SERVER,
+                kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+            ]),
+            ..Preferred::DEFAULT
+        };
+        runs_a_command(curve.as_ref(), preferred).await;
+    }
+}
+
+/// Nor any cipher but aes128-gcm.
+#[tokio::test]
+async fn a_server_with_only_aes128_gcm_connects() {
+    let preferred = Preferred {
+        cipher: Cow::Borrowed(&[cipher::AES_128_GCM]),
+        ..Preferred::DEFAULT
+    };
+    runs_a_command("aes128-gcm", preferred).await;
 }
