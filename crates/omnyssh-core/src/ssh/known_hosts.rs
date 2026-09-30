@@ -105,7 +105,9 @@ pub(crate) fn learn(host: &str, port: u16, key: &PublicKey) -> Result<(), russh:
 }
 
 /// The host key algorithms asked for when nothing is pinned: russh 0.46's list,
-/// which OmnySSH shipped with. P-384 is left out, and so is `ssh-rsa` (SHA-1).
+/// which OmnySSH shipped with, then P-384, last so that no server that worked
+/// shows another key; some devices have no other (Cisco RoomOS set to ECDSA).
+/// Never `ssh-rsa` (SHA-1).
 const KEY_ORDER: &[Algorithm] = &[
     Algorithm::Ed25519,
     Algorithm::Ecdsa {
@@ -120,11 +122,10 @@ const KEY_ORDER: &[Algorithm] = &[
     Algorithm::Rsa {
         hash: Some(HashAlg::Sha512),
     },
+    Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP384,
+    },
 ];
-
-const P384: Algorithm = Algorithm::Ecdsa {
-    curve: EcdsaCurve::NistP384,
-};
 
 /// Host key algorithms for `host:port`, those of the keys saved for it first,
 /// as ssh(1) orders them: a server with several keys then shows the pinned one
@@ -141,14 +142,11 @@ fn preferred_in(files: &[PathBuf], host: &str, port: u16) -> Cow<'static, [Algor
     else {
         return Cow::Borrowed(KEY_ORDER);
     };
-    // P-384 verifies fine but is missing from the list, so it is asked for only
-    // where it is pinned.
     let (mut order, rest): (Vec<Algorithm>, Vec<Algorithm>) = KEY_ORDER
         .iter()
         .cloned()
-        .chain([P384])
         .partition(|algo| saved.iter().any(|k| signs_with(k, algo)));
-    order.extend(rest.into_iter().filter(|algo| *algo != P384));
+    order.extend(rest);
     Cow::Owned(order)
 }
 
@@ -353,13 +351,19 @@ mod tests {
         .expect("p384 key");
         write(&file, &[line("vm", &p384)]);
         let order = preferred_in(&[file], "vm", 22);
-        assert_eq!(order.first(), Some(&P384));
-        assert_eq!(order.len(), KEY_ORDER.len() + 1);
+        let p384 = Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP384,
+        };
+        assert_eq!(order.first(), Some(&p384));
+        assert_eq!(order.len(), KEY_ORDER.len());
     }
 
     #[test]
-    fn nothing_pinned_asks_for_no_p384_and_no_sha1() {
-        assert!(!KEY_ORDER.contains(&P384));
+    fn nothing_pinned_asks_for_p384_last_and_no_sha1() {
+        let p384 = Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP384,
+        };
+        assert_eq!(KEY_ORDER.last(), Some(&p384));
         assert!(!KEY_ORDER.contains(&Algorithm::Rsa { hash: None }));
     }
 
