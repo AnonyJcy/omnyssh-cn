@@ -15,8 +15,9 @@ use semver::Version;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
-/// GitHub repository that hosts OmnySSH releases.
-const REPO: &str = "timhartmann7/omnyssh";
+/// GitHub repository that hosts this Chinese fork's releases.
+/// Keep update checks and downloads on the same distribution as the installed app.
+const REPO: &str = "AnonyJcy/omnyssh-cn";
 /// Timeout applied to every network request the updater makes.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// Target triple this binary was built for (provided by `build.rs`).
@@ -334,6 +335,21 @@ mod tests {
         assert!(InstallMethod::Homebrew.upgrade_command().is_some());
         assert!(InstallMethod::Cargo.upgrade_command().is_some());
         assert!(InstallMethod::Nix.upgrade_command().is_some());
+    }
+
+    #[test]
+    fn release_urls_stay_on_the_chinese_distribution() {
+        let info = UpdateInfo {
+            current: "1.1.5".into(),
+            latest: "1.1.6".into(),
+            tag: "v1.1.6".into(),
+            method: InstallMethod::Manual,
+            can_self_update: false,
+        };
+        assert_eq!(
+            info.release_url(),
+            "https://github.com/AnonyJcy/omnyssh-cn/releases/tag/v1.1.6"
+        );
     }
 
     #[test]

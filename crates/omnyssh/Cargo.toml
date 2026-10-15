@@ -18,7 +18,7 @@ name = "omny"
 path = "src/main.rs"
 
 [dependencies]
-omnyssh-core = { path = "../omnyssh-core", version = "1.1.5" }
+omnyssh-core = { path = "../omnyssh-core", version = "1.1.6" }
 
 # TUI
 ratatui = "0.29"

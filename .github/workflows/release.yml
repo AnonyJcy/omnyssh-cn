@@ -180,7 +180,7 @@ jobs:
   #   macos-latest   → aarch64-apple-darwin   (native)        → .dmg
   #   macos-latest   → x86_64-apple-darwin    (cross)         → .dmg
   #   ubuntu-22.04   → x86_64-unknown-linux-gnu                → .deb + .AppImage + .rpm
-  #   windows-latest → x86_64-pc-windows-msvc                  → NSIS -setup.exe
+  #   windows-latest → x86_64-pc-windows-msvc                  → NSIS -setup.exe + portable .zip
   bundle-gui:
     name: Bundle GUI · ${{ matrix.target }}
     needs: ci
@@ -366,6 +366,8 @@ jobs:
           if ($subsystem -ne 2) { throw "OmnySSH.exe links as subsystem $subsystem, expected 2 (Windows GUI)" }
 
           Copy-Item $setup[0].FullName "${{ matrix.asset }}-setup.exe"
+          # The portable GUI is the same checked Windows-subsystem binary, not the TUI.
+          Compress-Archive -Path "target/${{ matrix.target }}/release/OmnySSH.exe" -DestinationPath "${{ matrix.asset }}.zip" -Force
           Get-ChildItem "${{ matrix.asset }}*"
 
       - name: Upload GUI artifact
@@ -387,7 +389,7 @@ jobs:
     needs: [build, bundle-gui]
     # Only ever publish on a tag push — a manual dry run builds everything but
     # skips this job. `needs` already skips it when either build job failed.
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create the Release
@@ -420,7 +422,9 @@ jobs:
         id: changelog
         run: |
           VERSION="${GITHUB_REF_NAME#v}"   # strip the leading "v" from the tag
-          BODY=$(awk "/^## ${VERSION} /{found=1; next} found && (/^## /||/^---\$/){exit} found{print}" CHANGELOG.md)
+          BODY=$(awk -v version="$VERSION" '$1 == "##" && $2 == version {found=1; next} found && (/^## / || /^---$/) {exit} found {print}' CHANGELOG.md)
+          [ -n "$(printf '%s' "$BODY" | tr -d '[:space:]')" ] ||
+            { echo "No changelog entry for $VERSION"; exit 1; }
           # Pass the multi-line text through GITHUB_OUTPUT
           {
             echo 'body<<CHANGELOG_EOF'
@@ -451,4 +455,5 @@ jobs:
             artifacts/OmnySSH-x86_64.deb
             artifacts/OmnySSH-x86_64.rpm
             artifacts/OmnySSH-x86_64-setup.exe
+            artifacts/OmnySSH-x86_64.zip
             artifacts/SHA256SUMS

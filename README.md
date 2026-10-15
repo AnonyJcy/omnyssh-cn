@@ -46,7 +46,7 @@
 
 | 操作系统平台 | 文件格式 | 说明 |
 |-------------|----------|------|
-| **Windows x86_64** | `OmnySSH-x86_64-setup.exe` / `.zip` | 适用于 64 位 Windows 系统（安装版 / 便携版） |
+| **Windows x86_64** | `OmnySSH-x86_64-setup.exe` / `OmnySSH-x86_64.zip` | 64 位 Windows 安装版 / 便携版；便携版需已安装 WebView2 Runtime |
 | **macOS (Apple Silicon)** | `OmnySSH-aarch64-apple-darwin.dmg` | 适用于 M1/M2/M3/M4 系列芯片 |
 | **macOS (Intel)** | `OmnySSH-x86_64-apple-darwin.dmg` | 适用于 Intel 处理器 Mac |
 | **Linux x86_64** | `OmnySSH-x86_64.AppImage` / `.deb` / `.rpm` | 通用 Linux 发行版 |
