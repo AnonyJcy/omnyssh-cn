@@ -95,25 +95,15 @@ pub async fn forward_core_events(
             }
             // Auto key-setup (§4.2): `start_key_setup` drives the core and reports these
             // on the shared engine channel; the host name identifies the run.
-            CoreEvent::KeySetupProgress(host_name, step) => {
-                let _ = events::KeySetupProgress {
-                    host_name,
-                    step: step.into(),
+            event @ (CoreEvent::KeySetupProgress(..)
+            | CoreEvent::KeySetupComplete(..)
+            | CoreEvent::KeySetupPartial(..)
+            | CoreEvent::KeySetupFailed(..)
+            | CoreEvent::KeySetupFailedUnsafe(..)
+            | CoreEvent::KeySetupRollback(..)) => {
+                if let Some(outbound) = map_key_setup_event(event) {
+                    outbound.emit(&app);
                 }
-                .emit(&app);
-            }
-            CoreEvent::KeySetupComplete(host_name, key_path) => {
-                let _ = events::KeySetupComplete {
-                    host_name,
-                    key_path: key_path.to_string_lossy().to_string(),
-                }
-                .emit(&app);
-            }
-            CoreEvent::KeySetupFailed(host_name, error) => {
-                let _ = events::KeySetupFailed { host_name, error }.emit(&app);
-            }
-            CoreEvent::KeySetupRollback(host_name, result) => {
-                let _ = events::KeySetupRollback { host_name, result }.emit(&app);
             }
             // A newer release found by the startup check (§4.3) → the update banner.
             CoreEvent::UpdateAvailable(info) => {
@@ -128,6 +118,61 @@ pub async fn forward_core_events(
             _ => {}
         }
     }
+}
+
+/// A typed key-setup IPC event, ready to emit.
+#[derive(Debug)]
+enum KeySetupOutbound {
+    Progress(events::KeySetupProgress),
+    Complete(events::KeySetupComplete),
+    Failed(events::KeySetupFailed),
+    Rollback(events::KeySetupRollback),
+}
+
+impl KeySetupOutbound {
+    fn emit(self, app: &AppHandle) {
+        let _ = match self {
+            KeySetupOutbound::Progress(e) => e.emit(app),
+            KeySetupOutbound::Complete(e) => e.emit(app),
+            KeySetupOutbound::Failed(e) => e.emit(app),
+            KeySetupOutbound::Rollback(e) => e.emit(app),
+        };
+    }
+}
+
+/// Map a core key-setup event to its IPC event (§4.3): the partial and unsafe
+/// variants share the complete / failed events, told apart by their flag.
+fn map_key_setup_event(event: CoreEvent) -> Option<KeySetupOutbound> {
+    let complete = |host_name, key_path: std::path::PathBuf, password_off| {
+        KeySetupOutbound::Complete(events::KeySetupComplete {
+            host_name,
+            key_path: key_path.to_string_lossy().to_string(),
+            password_off,
+        })
+    };
+    let failed = |host_name, error, password_may_be_off| {
+        KeySetupOutbound::Failed(events::KeySetupFailed {
+            host_name,
+            error,
+            password_may_be_off,
+        })
+    };
+    Some(match event {
+        CoreEvent::KeySetupProgress(host_name, step) => {
+            KeySetupOutbound::Progress(events::KeySetupProgress {
+                host_name,
+                step: step.into(),
+            })
+        }
+        CoreEvent::KeySetupComplete(host_name, key_path) => complete(host_name, key_path, true),
+        CoreEvent::KeySetupPartial(host_name, key_path) => complete(host_name, key_path, false),
+        CoreEvent::KeySetupFailed(host_name, error) => failed(host_name, error, false),
+        CoreEvent::KeySetupFailedUnsafe(host_name, error) => failed(host_name, error, true),
+        CoreEvent::KeySetupRollback(host_name, result) => {
+            KeySetupOutbound::Rollback(events::KeySetupRollback { host_name, result })
+        }
+        _ => return None,
+    })
 }
 
 /// Written under a session's last output when it ends: dim, then the cursor hidden
@@ -458,6 +503,7 @@ mod tests {
             path: format!("/srv/{name}"),
             size: 0,
             is_dir: false,
+            modified: None,
         }
     }
 
@@ -544,5 +590,45 @@ mod tests {
         // A terminal render-nudge would never arrive here, but the catch-all keeps the
         // forwarder robust and the match exhaustive without inventing an event (§3.4).
         assert!(map_sftp_event(1, CoreEvent::PtyOutput(3)).is_none());
+    }
+
+    /// The wire payload of a key-setup event as JSON.
+    fn key_setup_json(event: CoreEvent) -> serde_json::Value {
+        match map_key_setup_event(event).expect("a key-setup event") {
+            KeySetupOutbound::Progress(e) => serde_json::to_value(e),
+            KeySetupOutbound::Complete(e) => serde_json::to_value(e),
+            KeySetupOutbound::Failed(e) => serde_json::to_value(e),
+            KeySetupOutbound::Rollback(e) => serde_json::to_value(e),
+        }
+        .expect("serialise")
+    }
+
+    #[test]
+    fn key_setup_outcomes_carry_the_password_state() {
+        let key = std::path::PathBuf::from("/k/omnyssh_web_ed25519");
+        assert_eq!(
+            key_setup_json(CoreEvent::KeySetupComplete("web".into(), key.clone())),
+            serde_json::json!({
+                "hostName": "web", "keyPath": "/k/omnyssh_web_ed25519", "passwordOff": true
+            })
+        );
+        assert_eq!(
+            key_setup_json(CoreEvent::KeySetupPartial("web".into(), key))["passwordOff"],
+            false
+        );
+        assert_eq!(
+            key_setup_json(CoreEvent::KeySetupFailed("web".into(), "boom".into())),
+            serde_json::json!({ "hostName": "web", "error": "boom", "passwordMayBeOff": false })
+        );
+        assert_eq!(
+            key_setup_json(CoreEvent::KeySetupFailedUnsafe("web".into(), "boom".into()))
+                ["passwordMayBeOff"],
+            true
+        );
+        assert_eq!(
+            key_setup_json(CoreEvent::KeySetupRollback("web".into(), "restored".into())),
+            serde_json::json!({ "hostName": "web", "result": "restored" })
+        );
+        assert!(map_key_setup_event(CoreEvent::Error("x".into())).is_none());
     }
 }

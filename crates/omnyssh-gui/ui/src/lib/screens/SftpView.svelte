@@ -7,16 +7,31 @@
   // remote uses sftp_list (arrives as an event). Semantic tokens only (§5.1).
   import { onMount, onDestroy } from 'svelte';
   import { homeDir, desktopDir, downloadDir, documentDir } from '@tauri-apps/api/path';
-  import { Icon, type IconName } from '$lib/theme';
+  import { getCurrentWebview } from '@tauri-apps/api/webview';
+  import { Button, Icon, type IconName } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
   import SftpPane from './SftpPane.svelte';
   import type { FileEntryDto } from '$lib/bindings';
   import { sessions, type Session } from '$lib/stores/sessions';
-  import { sftp, markedEntries, formatBytes, rootOf, type PaneSide } from '$lib/stores/sftp';
+  import {
+    sftp,
+    markedEntries,
+    dragPayload,
+    clashCount,
+    repeatedName,
+    formatBytes,
+    rootOf,
+    baseName,
+    isPlainName,
+    transferState,
+    CANCELLED,
+    type PaneSide
+  } from '$lib/stores/sftp';
   import { lastError } from '$lib/stores/notifications';
-  import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
+  import { streamerMode, displayHostTitle, maskText } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
+  import { dropPoint, isMac, isWindows } from '$lib/platform';
   import {
     sftpOpen,
     sftpList,
@@ -27,6 +42,7 @@
     sftpRename,
     sftpDelete,
     sftpPreview,
+    sftpCancel,
     listLocalDir,
     listLocalRoots,
     previewLocalFile
@@ -42,8 +58,9 @@
   // Queued mutations, dispatched one at a time (see the pump effect). The core's SFTP
   // command channel is bounded and drops on overflow, so a large batch fired at once
   // would silently lose commands and wedge the op-done FIFO; gating on the previous
-  // op's completion keeps at most one command outstanding.
-  let outbox = $state<Array<() => void>>([]);
+  // op's completion keeps at most one command outstanding. Transfers are flagged so a
+  // cancel drops the queued ones too.
+  let outbox = $state<Array<{ transfer: boolean; run: () => void }>>([]);
 
   // A pending mkdir/rename input. Rename carries the entry being renamed.
   let prompt = $state<{ kind: 'mkdir' | 'rename'; value: string; target?: FileEntryDto } | null>(
@@ -67,11 +84,11 @@
     await refreshLocal(root);
     selectedDrive = drive;
   }
-  const transfer = $derived(view?.transfer);
+  const transfer = $derived(view ? transferState(view) : undefined);
 
-  const localMarkedFiles = $derived(view ? markedEntries(view.local).filter((e) => !e.isDir) : []);
+  // Folders transfer whole, so the Upload/Download buttons take them like files.
+  const localMarked = $derived(view ? markedEntries(view.local) : []);
   const remoteMarked = $derived(view ? markedEntries(view.remote) : []);
-  const remoteMarkedFiles = $derived(remoteMarked.filter((e) => !e.isDir));
   const singleRemoteMark = $derived(remoteMarked.length === 1 ? remoteMarked[0] : undefined);
 
   function errMsg(err: unknown): string {
@@ -200,7 +217,12 @@
         home = '/';
       }
 
-      const clean = (p?: string) => (p ? p.replace(/[\\/]+$/, '') : '');
+      const clean = (p?: string) => {
+        if (!p) return '';
+        // Keep roots absolute; stripping C:\\ would turn it into a drive-relative path.
+        if (/^[a-zA-Z]:[\\/]+$/.test(p)) return `${p.slice(0, 2)}\\`;
+        return p.replace(/[\\/]+$/, '') || '/';
+      };
       desktop = clean(desktop);
       downloads = clean(downloads);
       documents = clean(documents);
@@ -272,7 +294,7 @@
     if (!view || view.pending.length > 0 || outbox.length === 0) return;
     const [next, ...rest] = outbox;
     outbox = rest;
-    next();
+    next.run();
   });
 
   // Re-list the affected pane once every queued mutation has drained — the FS changed
@@ -282,8 +304,15 @@
     if (id == null || !view || view.pending.length > 0 || outbox.length > 0 || !view.refresh) return;
     const target = view.refresh;
     sftp.clearRefresh(id);
-    if (target === 'local' || target === 'both') void refreshLocal(view.local.path);
-    if (target === 'remote' || target === 'both') refreshRemote(view.remote.path);
+    // A listing asked for meanwhile is where the user went; the old path again would
+    // take the pane back. A remote one also waited in the core's queue behind the
+    // transfer, so it shows the change.
+    if ((target === 'local' || target === 'both') && !view.local.loading) {
+      void refreshLocal(view.local.path);
+    }
+    if ((target === 'remote' || target === 'both') && !view.remote.loading) {
+      refreshRemote(view.remote.path);
+    }
   });
 
   function navigate(side: PaneSide, entry: FileEntryDto): void {
@@ -319,45 +348,266 @@
     };
   }
 
-  function enqueue(...actions: Array<() => void>): void {
+  function enqueue(actions: Array<() => void>, transfer = false): void {
     if (!actions.length) return;
     // Clear the prior batch's lingering error only when starting from idle. Piling onto a
     // batch that is still draining must not wipe a failure it already recorded (that error
     // stays visible until the next fresh action — see applyOpDone).
     const draining = outbox.length > 0 || (view?.pending.length ?? 0) > 0;
     if (backendId != null && !draining) sftp.clearError(backendId);
-    outbox = [...outbox, ...actions];
+    outbox = [...outbox, ...actions.map((run) => ({ transfer, run }))];
   }
 
-  function upload(): void {
+  // Stops the running transfer and drops the queued ones; the core cancels what was
+  // sent before this, so a transfer started afterwards runs.
+  function cancelTransfers(): void {
     const id = backendId;
-    if (id == null || !view) return;
-    const dir = view.remote.path;
-    enqueue(
-      ...localMarkedFiles.map((file) => () => {
-        sftp.pushOp(id, { kind: 'upload', name: file.name, refresh: 'remote' });
-        void sftpUpload(id, file.path, joinRemote(dir, file.name)).catch(onDispatchError(id));
-      })
+    if (id == null) return;
+    outbox = outbox.filter((op) => !op.transfer);
+    void sftpCancel(id).catch((err) => lastError.set(errMsg(err)));
+  }
+
+  // A transfer held back until the user agrees to replace what is there.
+  let overwrite = $state<{ count: number; dir: string; run: () => void } | null>(null);
+
+  // Runs a transfer of `names` into `dir`, asking first when the listing on show there
+  // already has some of them. A folder row's listing is unknown, so a drop on one goes.
+  // Two items bound for one name do not go: the second would replace the first unasked.
+  function unlessClashing(side: PaneSide, names: string[], dir: string, run: () => void): void {
+    const pane = view?.[side];
+    const caseless = side === 'local' && (isWindows || isMac);
+    const twice = repeatedName(names, caseless);
+    if (twice) {
+      lastError.set($t('sftp.duplicate_destination', { name: twice, dir }));
+      return;
+    }
+    const count = pane?.path === dir ? clashCount(names, pane.entries, caseless) : 0;
+    if (count > 0) overwrite = { count, dir, run };
+    else run();
+  }
+
+  function replace(): void {
+    const run = overwrite?.run;
+    overwrite = null;
+    run?.();
+  }
+
+  // `dir` defaults to the other pane's current directory; a drop onto a folder row
+  // passes that folder instead.
+  function upload(files: Array<Pick<FileEntryDto, 'name' | 'path'>>, dir = view?.remote.path): void {
+    const id = backendId;
+    if (id == null || !view || dir == null) return;
+    unlessClashing('remote', files.map((file) => file.name), dir, () =>
+      enqueue(
+        files.map((file) => () => {
+          sftp.pushOp(id, { kind: 'upload', name: file.name, refresh: 'remote' });
+          void sftpUpload(id, file.path, joinRemote(dir, file.name)).catch(onDispatchError(id));
+        }),
+        true
+      )
     );
   }
 
-  function download(): void {
+  // The local path is the listed name joined onto `dir`, so only a plain name goes.
+  function download(files: FileEntryDto[], dir = view?.local.path): void {
     const id = backendId;
-    if (id == null || !view) return;
-    const dir = view.local.path;
-    enqueue(
-      ...remoteMarkedFiles.map((file) => () => {
-        sftp.pushOp(id, { kind: 'download', name: file.name, refresh: 'local' });
-        void sftpDownload(id, joinLocal(dir, file.name), file.path).catch(onDispatchError(id));
-      })
+    if (id == null || !view || dir == null) return;
+    const odd = files.find((file) => !isPlainName(file.name, isWindows));
+    if (odd) lastError.set($t('sftp.invalid_local_name', { name: odd.name }));
+    const plain = files.filter((file) => isPlainName(file.name, isWindows));
+    unlessClashing('local', plain.map((file) => file.name), dir, () =>
+      enqueue(
+        plain.map((file) => () => {
+          sftp.pushOp(id, { kind: 'download', name: file.name, refresh: 'local' });
+          void sftpDownload(id, joinLocal(dir, file.name), file.path).catch(onDispatchError(id));
+        }),
+        true
+      )
     );
+  }
+
+  // --- Drag and drop -----------------------------------------------------------------
+  // Pane to pane uses pointer events, not HTML5 drag and drop: Tauri's native file-drop
+  // handler (on by default, and needed for drops from the OS below) swallows HTML5 drag
+  // events in WebView2. A press becomes a drag only past DRAG_THRESHOLD px, so a click
+  // still navigates or previews.
+  const DRAG_THRESHOLD = 5;
+
+  interface DropTarget {
+    side: PaneSide;
+    /** The directory the drop lands in: a folder row under the pointer, else the
+     *  pane's current directory. */
+    dir: string;
+    /** Set when `dir` is a folder row, for its highlight. */
+    row?: string;
+  }
+
+  let root = $state<HTMLElement>();
+  let press: { side: PaneSide; entry: FileEntryDto; x: number; y: number } | null = null;
+  let drag = $state<{
+    from: PaneSide;
+    files: FileEntryDto[];
+    x: number;
+    y: number;
+    target: DropTarget | null;
+  } | null>(null);
+  // The press went past the threshold, carrying something or not (`..`): the release
+  // must not click the row it ends on, even after Escape.
+  let moved = false;
+  let swallowClick = false;
+  // A drag from the OS hovering this view, for the remote pane's highlight.
+  let osDrop = $state<DropTarget | null>(null);
+
+  function endGesture(): void {
+    press = null;
+    drag = null;
+    moved = false;
+  }
+
+  // A hidden view lets go of what it held (§2): no ghost over the entity now shown, no
+  // transfer from a release there, and no Replace prompt to come back with a stale count.
+  $effect(() => {
+    if (!active) {
+      endGesture();
+      osDrop = null;
+      overwrite = null;
+    }
+  });
+
+  /** This view's pane (and folder row, if any) under a viewport point. Below the panes,
+   *  on the transfer strip, a point goes to the pane above it. */
+  function dropTargetAt(x: number, y: number): DropTarget | null {
+    if (!view || !root) return null;
+    const el = document.elementFromPoint(x, y);
+    if (!el || !root.contains(el)) return null;
+    const paneEl =
+      el.closest<HTMLElement>('[data-pane]') ??
+      [...root.querySelectorAll<HTMLElement>('[data-pane]')].find((pane) => {
+        const r = pane.getBoundingClientRect();
+        return x >= r.left && x < r.right;
+      });
+    const side = paneEl?.dataset.pane;
+    if (side !== 'local' && side !== 'remote') return null;
+    const row = el.closest<HTMLElement>('[data-dir-path]')?.dataset.dirPath;
+    return { side, dir: row ?? view[side].path, row };
+  }
+
+  function startPress(side: PaneSide, entry: FileEntryDto, e: PointerEvent): void {
+    if (e.button !== 0 || !view || !active) return;
+    press = { side, entry, x: e.clientX, y: e.clientY };
+    moved = false;
+  }
+
+  function onPointerMove(e: PointerEvent): void {
+    if (!press && !drag) return;
+    // The button came up where no pointerup reached this window.
+    if ((e.buttons & 1) === 0) {
+      endGesture();
+      return;
+    }
+    if (drag) {
+      const target = dropTargetAt(e.clientX, e.clientY);
+      drag = {
+        ...drag,
+        x: e.clientX,
+        y: e.clientY,
+        target: target && target.side !== drag.from ? target : null
+      };
+      return;
+    }
+    if (!press || !view) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD) return;
+    moved = true;
+    const files = dragPayload(view[press.side], press.entry);
+    const from = press.side;
+    press = null;
+    if (files.length === 0) return;
+    drag = { from, files, x: e.clientX, y: e.clientY, target: null };
+  }
+
+  function onPointerUp(): void {
+    const done = drag;
+    if (moved) {
+      swallowClick = true;
+      setTimeout(() => (swallowClick = false), 0);
+    }
+    endGesture();
+    if (!active || !done?.target) return;
+    if (done.from === 'local') upload(done.files, done.target.dir);
+    else download(done.files, done.target.dir);
+  }
+
+  function onKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Escape' && drag) drag = null;
+  }
+
+  // Drops from the OS file manager, with absolute paths and a position in the webview's
+  // own pixels. Only the remote pane accepts them; every SFTP view stays mounted, so
+  // only the visible one reacts.
+  onMount(() => {
+    let unlisten: (() => void) | undefined;
+    let webview: ReturnType<typeof getCurrentWebview>;
+    try {
+      webview = getCurrentWebview();
+    } catch {
+      // Off the Tauri runtime there is no webview to drop onto; pane to pane still works.
+      return;
+    }
+    // Read again as each drag comes in: the window may have moved to a screen of
+    // another scale.
+    let scale: number | null = null;
+    const readScale = () =>
+      void webview.window
+        .scaleFactor()
+        .then((s) => (scale = s))
+        .catch(() => {});
+    readScale();
+    void webview
+      .onDragDropEvent((event) => {
+        if (!active || !view) return;
+        const p = event.payload;
+        if (p.type === 'leave') {
+          osDrop = null;
+          return;
+        }
+        if (p.type === 'enter') readScale();
+        const at = dropPoint(p.position, scale);
+        const target = dropTargetAt(at.x, at.y);
+        const remote = target?.side === 'remote' ? target : null;
+        if (p.type === 'drop') {
+          osDrop = null;
+          if (remote) uploadDropped(p.paths, remote.dir);
+        } else {
+          osDrop = remote;
+        }
+      })
+      .then((fn) => {
+        if (destroyed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => unlisten?.();
+  });
+
+  // Dropped paths upload as they are: the core tells files from folders and walks the
+  // folders.
+  function uploadDropped(paths: string[], dir: string): void {
+    const items = paths.map((path) => ({ path, name: baseName(path) }));
+    if (items.some((item) => !item.name)) lastError.set($t('sftp.cannot_upload_volume'));
+    upload(items.filter((item) => item.name), dir);
+  }
+
+  function guarded<T>(fn: (arg: T) => void): (arg: T) => void {
+    return (arg) => {
+      if (!swallowClick) fn(arg);
+    };
   }
 
   function remove(): void {
     const id = backendId;
     if (id == null) return;
     enqueue(
-      ...remoteMarked.map((entry) => () => {
+      remoteMarked.map((entry) => () => {
         sftp.pushOp(id, { kind: 'delete', name: entry.name, refresh: 'remote' });
         void sftpDelete(id, entry.path).catch(onDispatchError(id));
       })
@@ -379,16 +629,20 @@
     if (!value) return;
     const dir = view.remote.path;
     if (prompt.kind === 'mkdir') {
-      enqueue(() => {
-        sftp.pushOp(id, { kind: 'mkdir', refresh: 'remote' });
-        void sftpMkdir(id, joinRemote(dir, value)).catch(onDispatchError(id));
-      });
+      enqueue([
+        () => {
+          sftp.pushOp(id, { kind: 'mkdir', refresh: 'remote' });
+          void sftpMkdir(id, joinRemote(dir, value)).catch(onDispatchError(id));
+        }
+      ]);
     } else if (prompt.target) {
       const from = prompt.target.path;
-      enqueue(() => {
-        sftp.pushOp(id, { kind: 'rename', refresh: 'remote' });
-        void sftpRename(id, from, joinRemote(dir, value)).catch(onDispatchError(id));
-      });
+      enqueue([
+        () => {
+          sftp.pushOp(id, { kind: 'rename', refresh: 'remote' });
+          void sftpRename(id, from, joinRemote(dir, value)).catch(onDispatchError(id));
+        }
+      ]);
     }
     prompt = null;
   }
@@ -416,13 +670,38 @@
     'focus-visible:ring-2 focus-visible:ring-focus placeholder:text-faint';
 </script>
 
+<svelte:window
+  onpointermove={onPointerMove}
+  onpointerup={onPointerUp}
+  onpointercancel={endGesture}
+  onkeydown={onKeyDown}
+/>
+
+{#if active && drag}
+  <!-- Follows the pointer; pointer-events-none so the pane under it stays hit-testable. -->
+  <div
+    class="pointer-events-none fixed z-50 flex items-center gap-1.5 rounded-full border border-default
+      bg-surface px-3 py-1.5 text-xs font-medium text-fg shadow-soft
+      {drag.target ? '' : 'opacity-70'}"
+    style="left: {drag.x + 14}px; top: {drag.y + 14}px"
+    aria-hidden="true"
+  >
+    <Icon name={drag.from === 'local' ? 'upload' : 'download'} size={13} />
+    {drag.files.length === 1 ? drag.files[0].name : $t('sftp.item_count', { count: drag.files.length })}
+  </div>
+{/if}
+
 <!-- bg-surface fills behind the macOS traffic lights (no seam); the pt insets the
-     panes below them. -->
-<div class="absolute inset-0 flex flex-col bg-surface pt-[var(--titlebar-h)] {active ? '' : 'hidden'}">
+     panes below them. The select-none while dragging keeps the drag from selecting text. -->
+<div
+  bind:this={root}
+  class="absolute inset-0 flex flex-col bg-surface pt-[var(--titlebar-h)]
+    {active ? '' : 'hidden'} {drag ? 'cursor-grabbing select-none' : ''}"
+>
   {#if openError}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center">
       <p class="font-medium">{$t('sftp.open_failed', { name: displayHostTitle(session.hostName, $streamerMode) })}</p>
-      <p class="max-w-md text-sm text-muted">{openError}</p>
+      <p class="max-w-md text-sm text-muted">{$maskText(openError)}</p>
     </div>
   {:else if !view}
     <div class="flex flex-1 items-center justify-center p-10 text-center">
@@ -432,25 +711,29 @@
     <div class="grid min-h-0 flex-1 grid-cols-2 divide-x divide-default">
       <SftpPane
         title={$t('sftp.local')}
+        side="local"
         pane={view.local}
+        dropActive={drag?.target?.side === 'local'}
+        dropDir={drag?.target?.side === 'local' ? drag.target.row : undefined}
+        onNavigate={guarded((e) => navigate('local', e))}
         shortcuts={localShortcuts}
         isWindows={localDirPaths.isWindows}
-        onNavigate={(e) => navigate('local', e)}
         onNavigatePath={(p) => refreshLocal(resolveLocalInputPath(p))}
         onToggleMark={(p) => toggleMark('local', p)}
-        onPreview={(e) => preview('local', e)}
+        onPreview={guarded((e) => preview('local', e))}
+        onDragStart={(entry, e) => startPress('local', entry, e)}
       >
         {#snippet toolbar()}
           {#if roots.length > 1}
             <Select
               bind:value={selectedDrive}
               class={driveSelect}
-              aria-label="Local drive"
-              title="Switch drive"
+              aria-label={$t('sftp.local_drive')}
+              title={$t('sftp.switch_drive')}
               onchange={(e) => switchDrive(e.currentTarget.value)}
             >
               {#if !drive}
-                <option value="" disabled>Drive</option>
+                <option value="" disabled>{$t('sftp.drive')}</option>
               {/if}
               {#each roots as root (root)}
                 <option value={root}>{root.replace(/[\\/]$/, '')}</option>
@@ -461,8 +744,8 @@
             type="button"
             class={toolBtn}
             title={$t('sftp.upload_tooltip')}
-            disabled={localMarkedFiles.length === 0}
-            onclick={upload}
+            disabled={localMarked.length === 0}
+            onclick={() => upload(localMarked)}
           >
             <Icon name="upload" size={13} />
             {$t('sftp.upload')}
@@ -471,7 +754,7 @@
             type="button"
             class={toolBtn}
             title={$t('sftp.refresh')}
-            aria-label="Refresh local"
+            aria-label={$t('sftp.refresh_local')}
             onclick={() => {
               // A drive plugged in since shows up too.
               void loadRoots();
@@ -485,20 +768,24 @@
 
       <SftpPane
         title={displayHostTitle(session.hostName, $streamerMode)}
+        side="remote"
         pane={view.remote}
+        dropActive={drag?.target?.side === 'remote' || osDrop != null}
+        dropDir={drag?.target?.side === 'remote' ? drag.target.row : osDrop?.row}
+        onNavigate={guarded((e) => navigate('remote', e))}
         shortcuts={remoteShortcuts}
-        onNavigate={(e) => navigate('remote', e)}
         onNavigatePath={(p) => refreshRemote(p)}
         onToggleMark={(p) => toggleMark('remote', p)}
-        onPreview={(e) => preview('remote', e)}
+        onPreview={guarded((e) => preview('remote', e))}
+        onDragStart={(entry, e) => startPress('remote', entry, e)}
       >
         {#snippet toolbar()}
           <button
             type="button"
             class={toolBtn}
             title={$t('sftp.download_tooltip')}
-            disabled={remoteMarkedFiles.length === 0}
-            onclick={download}
+            disabled={remoteMarked.length === 0}
+            onclick={() => download(remoteMarked)}
           >
             <Icon name="download" size={13} />
             {$t('sftp.download')}
@@ -520,7 +807,7 @@
             type="button"
             class={toolBtn}
             title={$t('sftp.delete')}
-            aria-label="Delete marked entries"
+            aria-label={$t('sftp.delete_marked')}
             disabled={remoteMarked.length === 0}
             onclick={remove}
           >
@@ -530,7 +817,7 @@
             type="button"
             class={toolBtn}
             title={$t('sftp.refresh')}
-            aria-label="Refresh remote"
+            aria-label={$t('sftp.refresh_remote')}
             onclick={() => refreshRemote(view.remote.path)}
           >
             <Icon name="refresh" size={13} />
@@ -540,28 +827,55 @@
     </div>
 
     {#if transfer}
-      <div class="shrink-0 border-t border-default px-4 py-2.5" aria-label="transfer progress">
+      <div class="shrink-0 border-t border-default px-4 py-2.5" aria-label={$t('sftp.transfer_progress')}>
         <div class="flex items-center justify-between gap-3 text-xs text-muted">
           <span class="min-w-0 truncate">
-            {transfer.kind === 'upload' ? $t('sftp.uploading') : $t('sftp.downloading')}
-            <span class="font-mono text-fg">{transfer.name}</span>
+            {transfer.preparing
+              ? $t('sftp.preparing')
+              : transfer.kind === 'upload'
+                ? $t('sftp.uploading')
+                : $t('sftp.downloading')}
+            <span class="font-mono text-fg">{transfer.name}</span>{transfer.preparing ? '…' : ''}
           </span>
-          <span class="shrink-0 tabular-nums">
-            {formatBytes(transfer.done)}{transfer.total > 0
-              ? ` / ${formatBytes(transfer.total)}`
-              : ''}
+          <span class="flex shrink-0 items-center gap-3">
+            {#if !transfer.preparing}
+              <span class="tabular-nums">
+                {formatBytes(transfer.done)}{transfer.total > 0
+                  ? ` / ${formatBytes(transfer.total)}`
+                  : ''}
+              </span>
+            {/if}
+            <button
+              type="button"
+              class={toolBtn}
+              title={$t('sftp.cancel_transfer')}
+              aria-label={$t('sftp.cancel_transfer')}
+              onclick={cancelTransfers}
+            >
+              <Icon name="close" size={13} />
+              {$t('sftp.cancel')}
+            </button>
           </span>
         </div>
         <div class="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-inset">
-          <div
-            class="h-full rounded-full bg-accent transition-[width]"
-            style="width: {transferPercent(transfer.done, transfer.total)}%"
-          ></div>
+          {#if transfer.preparing}
+            <!-- No size yet, so no fraction to show: a pulse says it is working. -->
+            <div class="h-full w-1/3 rounded-full bg-accent motion-safe:animate-pulse"></div>
+          {:else}
+            <div
+              class="h-full rounded-full bg-accent transition-[width]"
+              style="width: {transferPercent(transfer.done, transfer.total)}%"
+            ></div>
+          {/if}
         </div>
       </div>
     {:else if view.error}
-      <div class="shrink-0 border-t border-default px-4 py-2 text-xs text-status-crit">
-        {view.error}
+      <!-- A cancel the user asked for is news, not a failure. -->
+      <div
+        class="shrink-0 border-t border-default px-4 py-2 text-xs
+          {view.error === CANCELLED ? 'text-muted' : 'text-status-crit'}"
+      >
+        {view.error === CANCELLED ? $t('sftp.transfer_cancelled') : $maskText(view.error)}
       </div>
     {/if}
   {/if}
@@ -607,6 +921,22 @@
         </button>
       </footer>
     </form>
+  </Modal>
+{/if}
+
+{#if active && overwrite}
+  <Modal label={$t('sftp.replace_items')} onClose={() => (overwrite = null)}>
+    <div class="space-y-3 px-5 py-4">
+      <h2 class="text-sm font-semibold">{$t('sftp.replace_items')}</h2>
+      <p class="text-sm text-muted">
+        {$t('sftp.replace_count', { count: overwrite.count })} <span class="font-mono">{overwrite.dir}</span>.
+        {$t('sftp.replace_hint')}
+      </p>
+      <div class="flex justify-end gap-2 pt-1">
+        <Button variant="ghost" onclick={() => (overwrite = null)}>{$t('sftp.cancel')}</Button>
+        <Button variant="primary" onclick={replace}>{$t('sftp.replace')}</Button>
+      </div>
+    </div>
   </Modal>
 {/if}
 

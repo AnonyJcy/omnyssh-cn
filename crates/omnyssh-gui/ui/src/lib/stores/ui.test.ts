@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
-import { isCollapseChord, isPaletteChord, isRefreshHotkey } from './ui';
+import {
+  isCloseTabChord,
+  isCollapseChord,
+  isGroupHotkey,
+  isPaletteChord,
+  isRefreshHotkey,
+  isStreamerChord
+} from './ui';
+import { dialogs } from './dialogs';
+import { palette } from './palette';
 
 // Collapse persistence (tech-gui.md §2, §3.5). The canonical layer needs a fake
 // Tauri store — Vitest has no runtime — and a fresh module per test isolates the
@@ -121,6 +130,68 @@ describe('palette chord (⌘K / Ctrl+K)', () => {
   });
 });
 
+describe('close-tab chord (⌘W)', () => {
+  const chord = (init: KeyboardEventInit) => isCloseTabChord(new KeyboardEvent('keydown', init));
+
+  it('matches ⌘W, by key or by physical key', () => {
+    expect(chord({ key: 'w', metaKey: true })).toBe(true);
+    expect(chord({ key: 'W', metaKey: true })).toBe(true);
+    // AZERTY puts W where QWERTY has Z.
+    expect(chord({ key: 'w', code: 'KeyZ', metaKey: true })).toBe(true);
+    // A Greek layout names the key ς.
+    expect(chord({ key: '\u03c2', code: 'KeyW', metaKey: true })).toBe(true);
+  });
+
+  it('leaves the W key to a Latin layout that puts another character there', () => {
+    expect(chord({ key: 'z', code: 'KeyW', metaKey: true })).toBe(false); // AZERTY ⌘Z
+    expect(chord({ key: ',', code: 'KeyW', metaKey: true })).toBe(false); // Dvorak ⌘,
+  });
+
+  it('leaves Ctrl+W to the shell, ⌘⇧W to the window, and a held chord at one tab', () => {
+    expect(chord({ key: 'w', ctrlKey: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, shiftKey: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, altKey: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, repeat: true })).toBe(false);
+    expect(chord({ key: 'w' })).toBe(false);
+  });
+});
+
+describe('streamer chord (⌘⇧S / Ctrl+Shift+S)', () => {
+  const chord = (init: KeyboardEventInit) => isStreamerChord(new KeyboardEvent('keydown', init));
+
+  it('matches ⌘⇧S and Ctrl+Shift+S, either case', () => {
+    expect(chord({ key: 'S', code: 'KeyS', metaKey: true, shiftKey: true })).toBe(true);
+    expect(chord({ key: 's', code: 'KeyS', ctrlKey: true, shiftKey: true })).toBe(true);
+  });
+
+  it('goes by the physical key under a non-Latin layout, but not for another Latin letter', () => {
+    expect(chord({ key: 'Σ', code: 'KeyS', ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(chord({ key: 'Unidentified', code: 'KeyS', ctrlKey: true, shiftKey: true })).toBe(true);
+    expect(chord({ key: 'O', code: 'KeyS', ctrlKey: true, shiftKey: true })).toBe(false); // Dvorak
+  });
+
+  it('rejects auto-repeat, Alt, IME composing, a missing Shift or modifier, and other keys', () => {
+    expect(chord({ key: 'S', metaKey: true, shiftKey: true, repeat: true })).toBe(false);
+    expect(chord({ key: 'S', metaKey: true, shiftKey: true, altKey: true })).toBe(false);
+    expect(chord({ key: 'S', metaKey: true, shiftKey: true, isComposing: true })).toBe(false);
+    expect(chord({ key: 's', metaKey: true })).toBe(false);
+    expect(chord({ key: 'S', shiftKey: true })).toBe(false);
+    expect(chord({ key: 'K', metaKey: true, shiftKey: true })).toBe(false);
+  });
+
+  it('fires even while typing in an input', () => {
+    const input = document.createElement('input');
+    document.body.append(input);
+    let matched = false;
+    input.addEventListener('keydown', (e) => (matched = isStreamerChord(e)));
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'S', ctrlKey: true, shiftKey: true, bubbles: true })
+    );
+    input.remove();
+    expect(matched).toBe(true);
+  });
+});
+
 describe('refresh hotkey (r)', () => {
   const hot = (init: KeyboardEventInit) => isRefreshHotkey(new KeyboardEvent('keydown', init));
 
@@ -146,5 +217,56 @@ describe('refresh hotkey (r)', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', bubbles: true }));
     input.remove();
     expect(matched).toBe(false);
+  });
+});
+
+describe('group hotkey (g)', () => {
+  const hot = (init: KeyboardEventInit) => isGroupHotkey(new KeyboardEvent('keydown', init));
+
+  it('matches a bare g/G and rejects modifiers, repeat and other keys', () => {
+    expect(hot({ key: 'g' })).toBe(true);
+    expect(hot({ key: 'G' })).toBe(true);
+    expect(hot({ key: 'g', ctrlKey: true })).toBe(false);
+    expect(hot({ key: 'g', repeat: true })).toBe(false);
+    expect(hot({ key: 'r' })).toBe(false);
+  });
+
+  it('ignores a keydown without a key, as autofill sends', () => {
+    expect(isGroupHotkey(new Event('keydown') as KeyboardEvent)).toBe(false);
+  });
+
+  it('does not fire while typing in an editable field', () => {
+    const input = document.createElement('input');
+    document.body.append(input);
+    let matched = true;
+    input.addEventListener('keydown', (e) => (matched = isGroupHotkey(e)));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', bubbles: true }));
+    input.remove();
+    expect(matched).toBe(false);
+  });
+});
+
+describe('dashboard hotkeys under a modal', () => {
+  it('ignore r and g while any dialog is open', () => {
+    const id = Symbol('dialog');
+    dialogs.set([id]);
+    try {
+      expect(isRefreshHotkey(new KeyboardEvent('keydown', { key: 'r' }))).toBe(false);
+      expect(isGroupHotkey(new KeyboardEvent('keydown', { key: 'g' }))).toBe(false);
+    } finally {
+      dialogs.set([]);
+    }
+    expect(isGroupHotkey(new KeyboardEvent('keydown', { key: 'g' }))).toBe(true);
+  });
+
+  it('ignore r and g while the command palette is open', () => {
+    palette.open();
+    try {
+      expect(isRefreshHotkey(new KeyboardEvent('keydown', { key: 'r' }))).toBe(false);
+      expect(isGroupHotkey(new KeyboardEvent('keydown', { key: 'g' }))).toBe(false);
+    } finally {
+      palette.close();
+    }
+    expect(isGroupHotkey(new KeyboardEvent('keydown', { key: 'g' }))).toBe(true);
   });
 });

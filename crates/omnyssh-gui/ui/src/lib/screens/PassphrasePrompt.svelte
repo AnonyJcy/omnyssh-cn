@@ -4,6 +4,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import { Button, Icon } from '$lib/theme';
   import { passphrasePrompt, settlePassphrase } from '$lib/stores/passphrase';
+  import { maskText } from '$lib/stores/streamer';
   import { unlockIdentity } from '$lib/ipc/commands';
   import { t } from '$lib/i18n';
 
@@ -103,7 +104,7 @@
         {$t('passphrase.hint')}
       </p>
       {#if error}
-        <p class="text-xs text-status-crit">{error}</p>
+        <p class="text-xs text-status-crit">{$maskText(error)}</p>
       {/if}
       <div class="flex justify-end gap-2">
         <Button variant="ghost" type="button" onclick={cancel}>{$t('passphrase.cancel')}</Button>

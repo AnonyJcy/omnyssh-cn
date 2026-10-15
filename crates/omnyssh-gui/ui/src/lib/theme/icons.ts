@@ -5,6 +5,7 @@ export type IconName =
   | 'moon'
   | 'command'
   | 'search'
+  | 'eye'
   | 'dashboard'
   | 'snippets'
   | 'sftp'
@@ -28,9 +29,11 @@ export type IconName =
   | 'desktop'
   | 'home'
   | 'document'
-  | 'eye'
   | 'eyeOff'
   | 'settings'
   | 'telegram'
   | 'star'
-  | 'tunnel';
+  | 'tunnel'
+  | 'layers'
+  | 'chevron'
+  | 'grip';

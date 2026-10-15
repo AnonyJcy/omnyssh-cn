@@ -1,12 +1,17 @@
 <script lang="ts">
-  // One side of the dual-pane SFTP browser (tech-gui.md §3.2): an interactive
-  // current-path header with quick-access buttons and a parent-supplied toolbar,
-  // then the entry list. Clicking a directory (or the `..` row) navigates; clicking
-  // a file previews; clicking the path allows manual input and navigation.
+  // One side of the dual-pane SFTP browser (tech-gui.md §3.2): an editable current-path
+  // header with quick-access buttons and a parent-supplied toolbar, then the entry list.
+  // Clicking a directory (or the `..` row) navigates; clicking a file previews; the
+  // leading checkbox marks it for a batch transfer/delete. A press on a row may start
+  // a drag (the parent owns the drag and marks the pane `dropActive` while it is the target); `data-pane` and
+  // `data-dir-path` are how the parent finds the pane and folder under the pointer.
+  // A listing on its way dims the current one: a remote one can wait behind a transfer.
+  // Semantic tokens only — no colour literals (§5.1).
   import type { Snippet } from 'svelte';
   import { Icon, type IconName } from '$lib/theme';
   import type { FileEntryDto } from '$lib/bindings';
-  import { formatBytes, type Pane } from '$lib/stores/sftp';
+  import { formatBytes, formatDate, type Pane, type PaneSide } from '$lib/stores/sftp';
+  import { maskText } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
 
   export type ShortcutLocation = {
@@ -17,23 +22,33 @@
 
   let {
     title,
+    side,
     pane,
     shortcuts = [],
     isWindows = false,
+    dropActive = false,
+    dropDir,
     onNavigate,
     onNavigatePath,
     onToggleMark,
     onPreview,
+    onDragStart,
     toolbar
   }: {
     title: string;
+    side: PaneSide;
     pane: Pane;
     shortcuts?: ShortcutLocation[];
     isWindows?: boolean;
+    /** The pane is the target of a drag in progress. */
+    dropActive?: boolean;
+    /** The folder row under the pointer while this pane is the drop target. */
+    dropDir?: string;
     onNavigate: (entry: FileEntryDto) => void;
     onNavigatePath?: (path: string) => void;
     onToggleMark: (path: string) => void;
     onPreview: (entry: FileEntryDto) => void;
+    onDragStart?: (entry: FileEntryDto, event: PointerEvent) => void;
     toolbar?: Snippet;
   } = $props();
 
@@ -57,9 +72,9 @@
   }
 
   const isWin = $derived(
-    isWindows ||
+    side === 'local' && (isWindows ||
       (pane.path ? pane.path.includes('\\') || /^[a-zA-Z]:/.test(pane.path) : false) ||
-      (typeof navigator !== 'undefined' && /win/i.test(navigator.platform || navigator.userAgent))
+      (typeof navigator !== 'undefined' && /win/i.test(navigator.platform || navigator.userAgent)))
   );
 
   const lnkFilesCount = $derived(
@@ -106,9 +121,18 @@
   const rowBase =
     'flex w-full min-w-0 items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition ' +
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
+  // The date column appears once the pane is wide enough to keep names readable. It
+  // never wraps: under GDK_DPI_SCALE the rem it is sized in can shrink below its text.
+  const modifiedCol = 'hidden min-w-36 shrink-0 whitespace-nowrap text-right lg:inline';
 </script>
 
-<section aria-label={title} class="flex min-h-0 min-w-0 flex-1 flex-col">
+<section
+  aria-label={title}
+  aria-busy={pane.loading}
+  data-pane={side}
+  class="flex min-h-0 min-w-0 flex-1 flex-col transition
+    {dropActive ? 'bg-surface-inset ring-2 ring-inset ring-accent' : ''}"
+>
   <header class="shrink-0 border-b border-default px-3 py-2.5">
     <div class="flex items-center justify-between gap-2">
       <h2
@@ -211,7 +235,8 @@
     <!-- Quick Access Location Buttons -->
     {#if shortcuts.length > 0}
       <div class="mt-2 flex flex-wrap items-center gap-1.5">
-        {#each shortcuts as sc (sc.path)}
+        <!-- XDG locations can share a path (including Home and Root at /). -->
+        {#each shortcuts as sc (`${sc.label}\u0000${sc.path}`)}
           {@const active = isSameLocation(pane.path, sc.path)}
           <button
             type="button"
@@ -228,21 +253,37 @@
         {/each}
       </div>
     {/if}
+    {#if pane.loading && pane.entries.length > 0}
+      <p class="mt-1 text-xs text-faint">{$t('sftp.loading')}</p>
+    {/if}
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
     {#if pane.error}
-      <p class="px-2 py-6 text-center text-sm text-status-crit">{pane.error}</p>
+      <p class="px-2 py-6 text-center text-sm text-status-crit">{$maskText(pane.error)}</p>
     {:else if pane.loading && pane.entries.length === 0}
       <p class="px-2 py-6 text-center text-sm text-faint">{$t('sftp.loading')}</p>
     {:else if visibleEntries.length === 0}
       <p class="px-2 py-6 text-center text-sm text-faint">{$t('sftp.empty_directory')}</p>
     {:else}
-      <ul class="space-y-0.5">
+      <div
+        class="flex items-center gap-2 px-2 pb-1 pl-[2.125rem] text-[0.65rem] font-semibold uppercase
+          tracking-[0.12em] text-faint"
+        aria-hidden="true"
+      >
+        <span class="min-w-0 flex-1 pl-[1.4rem]">{$t('sftp.column_name')}</span>
+        <span class="shrink-0">{$t('sftp.column_size')}</span>
+        <span class={modifiedCol}>{$t('sftp.column_modified')}</span>
+      </div>
+      <ul class="space-y-0.5 transition-opacity {pane.loading ? 'opacity-50' : ''}">
         {#each visibleEntries as entry, i (i)}
           {@const isParent = entry.name === '..'}
           {@const marked = pane.marked.has(entry.path)}
-          <li class="flex items-center gap-1.5">
+          {@const dropHere = dropActive && entry.isDir && dropDir === entry.path}
+          <li
+            class="flex items-center gap-1.5 rounded {dropHere ? 'ring-2 ring-accent' : ''}"
+            data-dir-path={entry.isDir ? entry.path : undefined}
+          >
             {#if isParent}
               <span class="h-4 w-4 shrink-0"></span>
             {:else}
@@ -250,7 +291,7 @@
                 type="button"
                 role="checkbox"
                 aria-checked={marked}
-                aria-label="Mark {entry.name}"
+                aria-label={$t('sftp.mark_entry', { name: entry.name })}
                 class="grid h-4 w-4 shrink-0 place-items-center rounded border transition
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus
                   {marked ? 'border-accent bg-accent text-accent-fg' : 'border-strong text-transparent'}"
@@ -264,6 +305,7 @@
               class="{rowBase} text-muted hover:bg-surface-inset hover:text-fg"
               title={entry.name}
               onclick={() => (entry.isDir ? onNavigate(entry) : onPreview(entry))}
+              onpointerdown={(e) => onDragStart?.(entry, e)}
             >
               <Icon name={entry.isDir ? 'folder' : 'file'} size={15} />
               <span class="min-w-0 flex-1 truncate {entry.isDir ? 'font-medium text-fg' : ''}">
@@ -271,6 +313,14 @@
               </span>
               {#if !entry.isDir}
                 <span class="shrink-0 tabular-nums text-xs text-faint">{formatBytes(entry.size)}</span>
+              {/if}
+              {#if !isParent}
+                <span
+                  class="{modifiedCol} tabular-nums text-xs text-faint"
+                  title={entry.modified != null ? $t('sftp.modified_at', { date: formatDate(entry.modified, true) }) : undefined}
+                >
+                  {formatDate(entry.modified)}
+                </span>
               {/if}
             </button>
           </li>

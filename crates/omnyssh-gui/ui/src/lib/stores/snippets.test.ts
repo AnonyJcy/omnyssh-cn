@@ -15,7 +15,7 @@ function result(partial: Partial<SnippetResult>): SnippetResult {
 }
 
 describe('snippet run lifecycle', () => {
-  beforeEach(() => clearRun());
+  beforeEach(() => snippetRun.set(null));
 
   it('beginRun seeds one pending entry per host', () => {
     beginRun('deploy', ['web-1', 'web-2']);
@@ -27,10 +27,35 @@ describe('snippet run lifecycle', () => {
     ]);
   });
 
-  it('clearRun dismisses the panel', () => {
+  it('clearRun dismisses a finished run', () => {
     beginRun('deploy', ['web-1']);
+    reduceRunResultInto(result({}));
     clearRun();
     expect(get(snippetRun)).toBeNull();
+  });
+
+  it('clearRun keeps a run with hosts pending out of sight until the last one reports', () => {
+    beginRun('deploy', ['web-1', 'web-2']);
+    reduceRunResultInto(result({ hostName: 'web-1' }));
+    clearRun();
+    expect(get(snippetRun)).toMatchObject({ dismissed: true });
+    expect(get(snippetRun)?.entries[1].pending).toBe(true);
+
+    reduceRunResultInto(result({ hostName: 'web-2' }));
+    expect(get(snippetRun)).toBeNull();
+  });
+
+  it('a dismissed run goes once the execute command fails, and a new run starts fresh', () => {
+    beginRun('deploy', ['web-1']);
+    clearRun();
+    failPendingRun('boom');
+    expect(get(snippetRun)).toBeNull();
+
+    beginRun('deploy', ['web-1']);
+    clearRun();
+    beginRun('other', ['web-2']);
+    expect(get(snippetRun)?.dismissed).toBeUndefined();
+    expect(get(snippetRun)?.snippetName).toBe('other');
   });
 
   it('failPendingRun fails only the still-pending entries', () => {

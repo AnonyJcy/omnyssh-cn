@@ -6,7 +6,7 @@
   import type { SnippetDto } from '$lib/bindings';
   import { Button, StatusDot, Icon } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
-  import { hosts } from '$lib/stores/hosts';
+  import { hosts, firstOfEachName } from '$lib/stores/hosts';
   import { statuses } from '$lib/stores/statuses';
   import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { hostStatusDot } from '$lib/stores/palette';
@@ -39,6 +39,10 @@
         : []
     )
   );
+
+  // One row per name, the first: the backend runs a name on its first host, so a
+  // second row would only toggle along with it.
+  const choices = $derived(firstOfEachName($hosts));
 
   /** Focus the first param input on open for a keyboard-first run. */
   function autofocus(node: HTMLInputElement, active: boolean): void {
@@ -85,13 +89,13 @@
 
     <div class="space-y-2">
       <h3 class="text-[11px] font-medium uppercase tracking-[0.18em] text-faint">
-        {$t('snippet_runner.target_hosts', { selected: selected.size, total: $hosts.length })}
+        {$t('snippet_runner.target_hosts', { selected: selected.size, total: choices.length })}
       </h3>
       {#if $hosts.length === 0}
         <p class="text-sm text-muted">{$t('snippet_runner.no_hosts')}</p>
       {:else}
         <ul class="space-y-1">
-          {#each $hosts as host (host.name)}
+          {#each choices as host (host.name)}
             {@const checked = selected.has(host.name)}
             <li>
               <button

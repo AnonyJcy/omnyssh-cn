@@ -145,26 +145,30 @@ pub struct KeySetupProgress {
     pub step: KeySetupStepDto,
 }
 
-/// Key setup finished successfully — key auth is configured (tech-gui.md §4.3).
-/// `keyPath` is the generated private-key path (a path, never key material, §3.4).
+/// Key setup finished — key auth is configured (tech-gui.md §4.3). `keyPath` is the
+/// generated private-key path (a path, never key material, §3.4). `passwordOff` is
+/// false when the server's password login stayed on (no passwordless sudo).
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct KeySetupComplete {
     pub host_name: String,
     pub key_path: String,
+    pub password_off: bool,
 }
 
-/// Key setup failed before touching the server's auth config (tech-gui.md §4.3).
-/// Password authentication is never disabled unless a key was verified first.
+/// Key setup failed (tech-gui.md §4.3). `passwordMayBeOff` is true when OmnySSH could
+/// not confirm the server's password login is on: the rollback failed, or the disable
+/// step never answered. Otherwise password login was not changed, or was restored.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct KeySetupFailed {
     pub host_name: String,
     pub error: String,
+    pub password_may_be_off: bool,
 }
 
 /// Key setup rolled the server's sshd config back after a late failure (tech-gui.md
-/// §4.3). `result` is the human-readable rollback outcome.
+/// §4.3). `result` is the failure that triggered the rollback.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
 pub struct KeySetupRollback {

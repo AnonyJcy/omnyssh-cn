@@ -1,6 +1,8 @@
 import { writable } from 'svelte/store';
+import { translate, type Locale } from '$lib/i18n';
 import type { ConnectionStatusDto, HostDto } from '$lib/bindings';
 import type { Status } from '$lib/theme';
+import { firstOfEachName } from './hosts';
 import type { Session } from './sessions';
 
 // The ⌘K overlay and the host-picker are one component in two modes (tech-gui.md §2):
@@ -8,10 +10,16 @@ import type { Session } from './sessions';
 // is scoped to "pick a host for this action" and hands the choice back to its caller.
 export type PaletteMode = 'navigate' | 'pickHost';
 
-// A selectable row. Sessions surface only in the navigator; the picker is host-only.
+// A selectable row. Sessions and commands surface only in the navigator; the picker is
+// host-only.
 export type PaletteItem =
   | { kind: 'session'; session: Session }
-  | { kind: 'host'; host: HostDto };
+  | { kind: 'host'; host: HostDto }
+  | CommandItem;
+
+type CommandItem = { kind: 'command'; id: 'toggle-streamer'; label: string };
+
+const COMMANDS: CommandItem[] = [{ kind: 'command', id: 'toggle-streamer', label: 'Toggle streamer mode' }];
 
 function hostHaystack(h: HostDto): string {
   return `${h.name} ${h.hostname} ${h.user} ${h.tags.join(' ')}`.toLowerCase();
@@ -31,22 +39,28 @@ function matches(haystack: string, query: string): boolean {
     .every((token) => haystack.includes(token));
 }
 
-/** The filtered, ordered rows for the current mode: sessions first, then hosts (the
- *  picker drops the sessions). Order mirrors the stores so the list is stable. */
+/** The filtered, ordered rows for the current mode: sessions, hosts, then commands (the
+ *  picker keeps only the hosts). Order mirrors the stores so the list is stable. */
 export function paletteItems(
   mode: PaletteMode,
   hosts: HostDto[],
   sessions: Session[],
-  query: string
+  query: string,
+  currentLocale: Locale = 'en'
 ): PaletteItem[] {
-  const hostRows: PaletteItem[] = hosts
+  // One row per name, the first: a session opens a name on its first host, so a second
+  // row would open that one too. Deduped before the query, so no search shows the twin.
+  const hostRows: PaletteItem[] = firstOfEachName(hosts)
     .filter((h) => matches(hostHaystack(h), query))
     .map((host) => ({ kind: 'host', host }));
   if (mode === 'pickHost') return hostRows;
   const sessionRows: PaletteItem[] = sessions
     .filter((s) => matches(sessionHaystack(s), query))
     .map((session) => ({ kind: 'session', session }));
-  return [...sessionRows, ...hostRows];
+  const commandRows = COMMANDS.filter((c) =>
+    matches(`${c.label} ${translate(currentLocale, 'palette.toggle_streamer')}`.toLowerCase(), query)
+  );
+  return [...sessionRows, ...hostRows, ...commandRows];
 }
 
 /** A stable key for the current result set — its rows' identity and order, but not
@@ -54,9 +68,18 @@ export function paletteItems(
  *  when this changes, so a background status flip (which mints fresh item objects with
  *  the same ids) never snaps the selection back to the top mid-navigation. */
 export function paletteSignature(items: PaletteItem[]): string {
-  return items
-    .map((it) => (it.kind === 'session' ? `s:${it.session.id}` : `h:${it.host.name}`))
-    .join('\u0000');
+  return items.map(itemKey).join('\u0000');
+}
+
+function itemKey(it: PaletteItem): string {
+  switch (it.kind) {
+    case 'session':
+      return `s:${it.session.id}`;
+    case 'host':
+      return `h:${it.host.name}`;
+    case 'command':
+      return `c:${it.id}`;
+  }
 }
 
 /** Move the selection by `delta`, wrapping at both ends; an empty list stays at 0. */

@@ -33,6 +33,8 @@ pub enum AppAction {
     OpenTagFilter,
     /// Apply (or clear) the given tag filter. `None` clears the filter.
     TagFilterSelected(Option<String>),
+    /// Toggle grouping the dashboard grid by tag.
+    ToggleGroupByTag,
     /// Navigate the dashboard grid.
     DashboardNav(NavDir),
     /// Start SSH key setup for the selected host (Dashboard 'k' key).
@@ -142,6 +144,8 @@ pub enum AppAction {
     FmConfirmRename(String),
     /// Close the active file-manager popup (Esc).
     FmClosePopup,
+    /// Cancel the running transfer, or hide its progress once cancelling (Esc).
+    FmCancelTransfer,
     /// Navigate the cursor inside the host-picker popup (j/k).
     FmHostPickerNav(i8), // +1 = down, -1 = up
 

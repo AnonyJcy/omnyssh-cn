@@ -17,6 +17,9 @@
   import { terminalDidExit } from '$lib/ipc/router';
   import { lastError } from '$lib/stores/notifications';
   import { dialogs } from '$lib/stores/dialogs';
+  import { palette } from '$lib/stores/palette';
+  import { isStreamerChord } from '$lib/stores/ui';
+  import { activeEntity } from '$lib/stores/activeEntity';
   import {
     terminalOpen,
     terminalWrite,
@@ -64,6 +67,12 @@
         }
       }
     });
+  }
+
+  /** No dialog or palette holds the keyboard: keystrokes meant for a key passphrase
+   *  must never reach the shell. */
+  function keyboardFree(): boolean {
+    return get(dialogs).length === 0 && !get(palette).open;
   }
 
   /** The remote side ended the session: the tab stays for its last output, and the
@@ -180,6 +189,9 @@
       // reaches the shell. Returning false only keeps xterm out of it; the default is
       // ours to stop. The write happens inside the keydown, which WebKit requires.
       term.attachCustomKeyEventHandler((e) => {
+        // The streamer chord belongs to the window (AppShell), never to the shell, where
+        // a ^S would stop its output.
+        if (isStreamerChord(e)) return false;
         if (isCopyShortcut(e, isMac)) {
           e.preventDefault();
           if (term?.hasSelection()) {
@@ -226,7 +238,7 @@
       resizeObserver.observe(container);
 
       ready = true;
-      if (active && get(dialogs).length === 0) term.focus();
+      if (active && keyboardFree()) term.focus();
     })().catch((err) => {
       // `terminal_open` itself failed (e.g. the session could not be spawned): no
       // PtyExited follows, so mark the tab failed here instead of leaving it hung.
@@ -247,15 +259,16 @@
     term = undefined;
   });
 
-  // Becoming visible: a hidden container measured 0, so refit and take focus.
-  // An open dialog keeps the keyboard (keystrokes meant for a key passphrase must
-  // never reach the shell); the terminal takes it back once the last one closes.
+  // Becoming visible: a hidden container measured 0, so refit and take focus. Also
+  // when a dialog or the palette closes, and when the active tab is clicked again,
+  // which moves focus to the tab without changing `active`. The keyboard check runs
+  // in the frame, since a dialog can open before it.
   $effect(() => {
     if (active && ready) {
-      const free = $dialogs.length === 0;
+      void [$dialogs, $palette, $activeEntity];
       requestAnimationFrame(() => {
         safeFit();
-        if (free) term?.focus();
+        if (keyboardFree()) term?.focus();
         syncScrolled();
       });
     }

@@ -196,8 +196,9 @@ async sftpList(sessionId: number, path: string) : Promise<Result<null, CommandEr
 }
 },
 /**
- * Upload a local file to a remote path (tech-gui.md §4.2). Allocates a transfer id
- * owned by this session so `transfer-progress` routes back to the tab (§3.4).
+ * Upload a local file or folder to a remote path (tech-gui.md §4.2). Allocates a
+ * transfer id owned by this session so `transfer-progress` routes back to the tab
+ * (§3.4).
  */
 async sftpUpload(sessionId: number, local: string, remote: string) : Promise<Result<null, CommandError>> {
     try {
@@ -208,8 +209,10 @@ async sftpUpload(sessionId: number, local: string, remote: string) : Promise<Res
 }
 },
 /**
- * Download a remote file to a local path (tech-gui.md §4.2). See `sftp_upload` for
- * the transfer-id routing; the core guards the local destination against `..` (§3.2).
+ * Download a remote file or folder to a local path (tech-gui.md §4.2). See
+ * `sftp_upload` for the transfer-id routing. `local` ends in the name the server
+ * listed, which the frontend checks is one plain name; the core keeps every name in
+ * a folder inside the destination (§3.2).
  */
 async sftpDownload(sessionId: number, local: string, remote: string) : Promise<Result<null, CommandError>> {
     try {
@@ -264,7 +267,19 @@ async sftpPreview(sessionId: number, path: string) : Promise<Result<null, Comman
 }
 },
 /**
- * Close an SFTP session and its connection (tech-gui.md §4.2).
+ * Cancel the transfer this session is running (tech-gui.md §4.2). It stops at its
+ * next step, and its `sftp-op-done` says it was cancelled.
+ */
+async sftpCancel(sessionId: number) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sftp_cancel", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Close an SFTP session and its connection, stopping its transfer (tech-gui.md §4.2).
  */
 async sftpClose(sessionId: number) : Promise<Result<null, CommandError>> {
     try {
@@ -531,8 +546,9 @@ export type Error = { message: string }
 /**
  * A file or directory in an SFTP panel listing (tech-gui.md §4.1). Maps from the
  * core `FileEntry`; `path` is the absolute path the frontend marks entries by.
+ * `modified` is Unix seconds, `null` when unknown.
  */
-export type FileEntryDto = { name: string; path: string; size: number; isDir: boolean }
+export type FileEntryDto = { name: string; path: string; size: number; isDir: boolean; modified: number | null }
 /**
  * Preview bytes for a remote file (tech-gui.md §4.3). Stamped with `sessionId`; the
  * core `FilePreviewReady` carries only the path + content (§3.4).
@@ -572,15 +588,17 @@ export type HostsLoaded = HostDto[]
  */
 export type KeyPassphraseRequired = { hostName: string; keyPath: string }
 /**
- * Key setup finished successfully — key auth is configured (tech-gui.md §4.3).
- * `keyPath` is the generated private-key path (a path, never key material, §3.4).
+ * Key setup finished — key auth is configured (tech-gui.md §4.3). `keyPath` is the
+ * generated private-key path (a path, never key material, §3.4). `passwordOff` is
+ * false when the server's password login stayed on (no passwordless sudo).
  */
-export type KeySetupComplete = { hostName: string; keyPath: string }
+export type KeySetupComplete = { hostName: string; keyPath: string; passwordOff: boolean }
 /**
- * Key setup failed before touching the server's auth config (tech-gui.md §4.3).
- * Password authentication is never disabled unless a key was verified first.
+ * Key setup failed (tech-gui.md §4.3). `passwordMayBeOff` is true when OmnySSH could
+ * not confirm the server's password login is on: the rollback failed, or the disable
+ * step never answered. Otherwise password login was not changed, or was restored.
  */
-export type KeySetupFailed = { hostName: string; error: string }
+export type KeySetupFailed = { hostName: string; error: string; passwordMayBeOff: boolean }
 /**
  * A progress step of an auto key-setup run (tech-gui.md §4.3). Mapped by the shared
  * engine bridge from `CoreEvent::KeySetupProgress`; the host name identifies the run.
@@ -588,7 +606,7 @@ export type KeySetupFailed = { hostName: string; error: string }
 export type KeySetupProgress = { hostName: string; step: KeySetupStepDto }
 /**
  * Key setup rolled the server's sshd config back after a late failure (tech-gui.md
- * §4.3). `result` is the human-readable rollback outcome.
+ * §4.3). `result` is the failure that triggered the rollback.
  */
 export type KeySetupRollback = { hostName: string; result: string }
 /**

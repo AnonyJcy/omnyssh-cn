@@ -101,6 +101,15 @@ impl App {
                 );
             }
 
+            AppAction::ToggleGroupByTag => {
+                let state = self.state.read().await;
+                self.view.host_list.toggle_group_by_tag(
+                    &state.hosts,
+                    &state.metrics,
+                    &state.connection_statuses,
+                );
+            }
+
             AppAction::DashboardNav(dir) => {
                 // The number of grid columns is computed identically here and
                 // in the render function. Keep these two in sync.
@@ -111,17 +120,7 @@ impl App {
                     let w = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80);
                     ((w + GAP) / (CARD_W + GAP)).max(1) as usize
                 };
-                let len = self.view.host_list.filtered_indices.len();
-                if len == 0 {
-                    return Ok(());
-                }
-                let sel = self.view.host_list.selected;
-                self.view.host_list.selected = match dir {
-                    NavDir::Up => sel.saturating_sub(approx_cols),
-                    NavDir::Down => (sel + approx_cols).min(len - 1),
-                    NavDir::Left => sel.saturating_sub(1),
-                    NavDir::Right => (sel + 1).min(len - 1),
-                };
+                self.view.host_list.navigate(&dir, approx_cols);
             }
 
             // ---------------------------------------------------------------
@@ -205,9 +204,17 @@ impl App {
                             Ok(result) => {
                                 use omnyssh_core::ssh::key_setup::KeySetupState;
                                 match result.state {
-                                    KeySetupState::Success | KeySetupState::PartialSuccess => {
+                                    KeySetupState::Success => {
                                         let _ = tx
                                             .send(CoreEvent::KeySetupComplete(
+                                                host_clone.name.clone(),
+                                                result.key_path,
+                                            ))
+                                            .await;
+                                    }
+                                    KeySetupState::PartialSuccess => {
+                                        let _ = tx
+                                            .send(CoreEvent::KeySetupPartial(
                                                 host_clone.name.clone(),
                                                 result.key_path,
                                             ))
@@ -615,6 +622,27 @@ impl App {
 
             AppAction::FmClosePopup => {
                 self.view.file_manager.popup = None;
+            }
+
+            AppAction::FmCancelTransfer => {
+                let fm = &mut self.view.file_manager;
+                if fm.cancelling {
+                    // One slow to stop need not hold the screen: a new batch waits
+                    // for it, and how it ended is still reported.
+                    fm.popup = None;
+                } else {
+                    // Items not sent yet are dropped; the running one stops at its
+                    // next step and reports in.
+                    if !self.sftp_queue.is_empty() {
+                        self.sftp_queue.clear();
+                        fm.op_error.get_or_insert_with(|| CANCELLED.to_string());
+                    }
+                    if let Some(mgr) = &self.sftp_manager {
+                        mgr.cancel();
+                    }
+                    fm.cancelling = true;
+                    self.view.status_message = Some("Cancelling…".to_string());
+                }
             }
 
             AppAction::FmOpenHostPicker => {

@@ -125,6 +125,9 @@ pub struct KeySetupMachine {
     current_step: Option<KeySetupStep>,
     has_sudo: bool,
     password_disabled: bool,
+    /// The step-4 command was sent and has not answered. Kept on the machine
+    /// so it survives the total timeout dropping the running future.
+    disable_unanswered: bool,
 }
 
 impl KeySetupMachine {
@@ -135,6 +138,7 @@ impl KeySetupMachine {
             current_step: None,
             has_sudo: true,
             password_disabled: false,
+            disable_unanswered: false,
         }
     }
 
@@ -207,6 +211,35 @@ impl KeySetupMachine {
     pub fn rollback_complete(&mut self) {
         self.state = KeySetupState::RolledBack;
         self.password_disabled = false;
+    }
+
+    /// Records that the step-4 command is about to run.
+    fn disable_sent(&mut self) {
+        self.disable_unanswered = true;
+    }
+
+    /// Records that the step-4 command answered, so its effect is known.
+    fn disable_answered(&mut self) {
+        self.disable_unanswered = false;
+    }
+
+    /// Fails the run on the total timeout.
+    fn timed_out(&mut self) {
+        // Running out of time is only safe before the point of no return.
+        // Past it the server has password auth disabled, so the run needs
+        // the same rollback a failed final check would get.
+        let step = if self.password_disabled {
+            KeySetupStep::FinalCheck
+        } else {
+            KeySetupStep::VerifyKeyAuth
+        };
+        self.step_result(step, Err(anyhow!("timed out")));
+    }
+
+    /// Whether a failed run, once any rollback was tried, may have left
+    /// password login off: the rollback failed, or step 4 never answered.
+    fn password_may_be_off(&self) -> bool {
+        self.disable_unanswered || self.state == KeySetupState::NeedsRollback
     }
 }
 
@@ -571,13 +604,15 @@ pub fn build_reload_sshd_command() -> String {
 /// Builds the emergency rollback command.
 ///
 /// Restores the most recent OmnySSH backup of sshd_config and reloads the daemon.
+/// A missing backup exits 0 so its marker reaches the caller: a checked run drops
+/// the output of a command that fails.
 pub fn build_rollback_command() -> String {
     r#"BACKUP=$(find /etc/ssh -maxdepth 1 -name 'sshd_config.omnyssh_backup.*' 2>/dev/null | sort | tail -1); \
        if [ -n "$BACKUP" ]; then \
            sudo cp "$BACKUP" /etc/ssh/sshd_config && \
            (sudo systemctl reload sshd 2>/dev/null || sudo systemctl reload ssh 2>/dev/null || sudo service sshd reload 2>/dev/null || sudo service ssh reload); \
        else \
-           echo "OMNYSSH_NO_BACKUP"; exit 1; \
+           echo "OMNYSSH_NO_BACKUP"; \
        fi"#
     .to_string()
 }
@@ -600,11 +635,39 @@ pub async fn setup_key_for_host(
     key_type: KeyType,
     progress_tx: Option<tokio::sync::mpsc::Sender<KeySetupStep>>,
 ) -> Result<KeySetupResult> {
+    match run_key_setup(host, password_session, key_type, progress_tx).await {
+        (result, None) => Ok(result),
+        (_, Some(error)) => Err(error),
+    }
+}
+
+/// Runs the same process as [`setup_key_for_host`], but every outcome comes back
+/// as the result: a failed run ends `FailedSafe`, `RolledBack` or `NeedsRollback`
+/// (the rollback failed), with `error_message` and `password_may_be_off` set.
+pub async fn setup_key_for_host_detailed(
+    host: &Host,
+    password_session: &SshSession,
+    key_type: KeyType,
+    progress_tx: Option<tokio::sync::mpsc::Sender<KeySetupStep>>,
+) -> KeySetupResult {
+    run_key_setup(host, password_session, key_type, progress_tx)
+        .await
+        .0
+}
+
+/// Shared runner: the result, plus the error a failed run ends with.
+async fn run_key_setup(
+    host: &Host,
+    password_session: &SshSession,
+    key_type: KeyType,
+    progress_tx: Option<tokio::sync::mpsc::Sender<KeySetupStep>>,
+) -> (KeySetupResult, Option<anyhow::Error>) {
     let mut machine = KeySetupMachine::new();
     let mut result = KeySetupResult {
         key_path: PathBuf::new(),
         state: KeySetupState::NotStarted,
         error_message: None,
+        password_may_be_off: false,
     };
 
     // The two verification steps reconnect, so they walk the host's ProxyJump
@@ -621,30 +684,22 @@ pub async fn setup_key_for_host(
             key_type,
             verify_timeout,
             &mut machine,
+            &mut result.key_path,
             progress_tx,
         ),
     )
     .await
     {
-        Ok(Ok(key_path)) => {
-            result.key_path = key_path;
+        Ok(Ok(())) => {
             result.state = machine.state().clone();
-            return Ok(result);
+            return (result, None);
         }
         Ok(Err(e)) => {
             error!("Key setup failed for {}: {}", host.name, e);
             e
         }
         Err(_) => {
-            // Running out of time is only safe before the point of no return.
-            // Past it the server has password auth disabled, so the run needs
-            // the same rollback a failed final check would get.
-            let step = if machine.password_disabled {
-                KeySetupStep::FinalCheck
-            } else {
-                KeySetupStep::VerifyKeyAuth
-            };
-            machine.step_result(step, Err(anyhow!("timed out")));
+            machine.timed_out();
             anyhow!(
                 "Key setup timed out after {} seconds",
                 total_timeout.as_secs()
@@ -668,19 +723,22 @@ pub async fn setup_key_for_host(
             result.state = KeySetupState::RolledBack;
         }
     }
+    result.password_may_be_off = machine.password_may_be_off();
 
-    Err(error)
+    (result, Some(error))
 }
 
-/// Internal implementation of the key setup process.
+/// Internal implementation of the key setup process. `key_path` is filled as soon
+/// as step 1 produced the key, so a failed or timed-out run still reports it.
 async fn setup_key_internal(
     host: &Host,
     password_session: &SshSession,
     key_type: KeyType,
     verify_timeout: Duration,
     machine: &mut KeySetupMachine,
+    key_path: &mut PathBuf,
     progress_tx: Option<tokio::sync::mpsc::Sender<KeySetupStep>>,
-) -> Result<PathBuf> {
+) -> Result<()> {
     // Step 1: Generate key pair.
     info!("Step 1/6: Generating key pair for {}", host.name);
     if let Some(ref tx) = progress_tx {
@@ -689,6 +747,7 @@ async fn setup_key_internal(
     let (private_key_path, public_key_path) = match generate_key_pair(&host.name, key_type).await {
         Ok(paths) => {
             machine.step_result(KeySetupStep::GenerateKey, Ok(()));
+            *key_path = paths.0.clone();
             paths
         }
         Err(e) => {
@@ -782,7 +841,7 @@ async fn setup_key_internal(
             warn!("No sudo access — password authentication will NOT be disabled");
             machine.set_has_sudo(false);
             machine.step_result(KeySetupStep::VerifyKeyAuth, Ok(())); // Trigger PartialSuccess.
-            return Ok(private_key_path);
+            return Ok(());
         }
     }
 
@@ -792,11 +851,17 @@ async fn setup_key_internal(
         let _ = tx.send(KeySetupStep::DisablePassword).await;
     }
     let disable_cmd = build_disable_password_command();
-    match time::timeout(STEP_TIMEOUT, password_session.run_command(&disable_cmd)).await {
+    machine.disable_sent();
+    let disabled = time::timeout(STEP_TIMEOUT, password_session.run_command(&disable_cmd)).await;
+    // Only the command's own output says what it did to the server.
+    if matches!(disabled, Ok(Ok(_))) {
+        machine.disable_answered();
+    }
+    match disabled {
         Ok(Ok(output)) if output.contains("OMNYSSH_NO_SUDO") => {
             machine.set_has_sudo(false);
             machine.step_result(KeySetupStep::VerifyKeyAuth, Ok(()));
-            return Ok(private_key_path);
+            return Ok(());
         }
         Ok(Ok(output)) if output.contains("OMNYSSH_CONFIG_ERROR") => {
             machine.step_result(KeySetupStep::DisablePassword, Err(anyhow!("Config error")));
@@ -853,7 +918,7 @@ async fn setup_key_internal(
             info!("Final verification passed! Key setup complete.");
             final_session.disconnect().await;
             machine.step_result(KeySetupStep::FinalCheck, Ok(()));
-            Ok(private_key_path)
+            Ok(())
         }
         Ok(Err(e)) => {
             error!(
@@ -885,16 +950,24 @@ async fn emergency_rollback(session: &SshSession) -> Result<()> {
     warn!("Attempting emergency rollback of sshd_config");
     let rollback_cmd = build_rollback_command();
 
-    match time::timeout(STEP_TIMEOUT, session.run_command(&rollback_cmd)).await {
-        Ok(Ok(output)) if output.contains("OMNYSSH_NO_BACKUP") => {
+    // Checked: a failed restore or reload must not count as a rollback.
+    let output = time::timeout(STEP_TIMEOUT, session.run_command_checked(&rollback_cmd))
+        .await
+        .unwrap_or_else(|_| Err(anyhow!("timeout")));
+    rollback_outcome(output)
+}
+
+/// Reads the rollback command's checked run.
+fn rollback_outcome(output: Result<String>) -> Result<()> {
+    match output {
+        Ok(output) if output.contains("OMNYSSH_NO_BACKUP") => {
             Err(anyhow!("No backup file found for rollback"))
         }
-        Ok(Ok(_)) => {
+        Ok(_) => {
             info!("Rollback successful — password authentication restored");
             Ok(())
         }
-        Ok(Err(e)) => Err(anyhow!("Rollback failed: {}", e)),
-        Err(_) => Err(anyhow!("Rollback failed: timeout")),
+        Err(e) => Err(anyhow!("Rollback failed: {}", e)),
     }
 }
 
@@ -905,12 +978,16 @@ async fn emergency_rollback(session: &SshSession) -> Result<()> {
 /// Result of the key setup process.
 #[derive(Debug, Clone)]
 pub struct KeySetupResult {
-    /// Path to the generated private key file.
+    /// Path to the generated private key file; set once step 1 produced it, so a
+    /// failed run reports it too (empty when no key was made).
     pub key_path: PathBuf,
     /// Final state of the setup process.
     pub state: KeySetupState,
     /// Error message if the setup failed.
     pub error_message: Option<String>,
+    /// A failed run may have left the server's password login off: the
+    /// rollback failed, or the step-4 command's outcome is unknown.
+    pub password_may_be_off: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,6 +1106,97 @@ mod tests {
         // Password is disabled but key doesn't work → rollback needed.
         assert_eq!(machine.state(), &KeySetupState::NeedsRollback);
         assert!(machine.password_disabled);
+    }
+
+    #[test]
+    fn test_unanswered_disable_may_leave_password_off() {
+        let mut machine = KeySetupMachine::new();
+        machine.step_result(KeySetupStep::VerifyKeyAuth, Ok(()));
+        machine.disable_sent();
+        // Transport error or step timeout: the command never answered.
+        machine.step_result(KeySetupStep::DisablePassword, Err(anyhow!("timeout")));
+
+        assert_eq!(machine.state(), &KeySetupState::FailedSafe);
+        assert!(machine.password_may_be_off());
+    }
+
+    #[test]
+    fn test_total_timeout_during_disable_may_leave_password_off() {
+        let mut machine = KeySetupMachine::new();
+        machine.step_result(KeySetupStep::VerifyKeyAuth, Ok(()));
+        machine.disable_sent();
+        machine.timed_out();
+
+        // No rollback runs, but the server may already have been changed.
+        assert_eq!(machine.state(), &KeySetupState::FailedSafe);
+        assert!(machine.password_may_be_off());
+    }
+
+    #[test]
+    fn test_answered_disable_failure_is_known() {
+        // OMNYSSH_CONFIG_ERROR: the command restored its backup itself.
+        let mut machine = KeySetupMachine::new();
+        machine.disable_sent();
+        machine.disable_answered();
+        machine.step_result(KeySetupStep::DisablePassword, Err(anyhow!("config error")));
+
+        assert_eq!(machine.state(), &KeySetupState::FailedSafe);
+        assert!(!machine.password_may_be_off());
+    }
+
+    #[test]
+    fn test_failure_before_disable_is_known() {
+        let mut machine = KeySetupMachine::new();
+        machine.step_result(KeySetupStep::VerifyKeyAuth, Err(anyhow!("refused")));
+        assert!(!machine.password_may_be_off());
+
+        let mut machine = KeySetupMachine::new();
+        machine.timed_out();
+        assert_eq!(machine.state(), &KeySetupState::FailedSafe);
+        assert!(!machine.password_may_be_off());
+    }
+
+    #[test]
+    fn test_rollback_outcome_decides_password_may_be_off() {
+        let mut machine = KeySetupMachine::new();
+        machine.disable_sent();
+        machine.disable_answered();
+        machine.step_result(KeySetupStep::DisablePassword, Ok(()));
+        machine.timed_out();
+
+        // Past step 4 a timeout needs the rollback; until it succeeds the
+        // password may be off.
+        assert_eq!(machine.state(), &KeySetupState::NeedsRollback);
+        assert!(machine.password_may_be_off());
+
+        machine.rollback_complete();
+        assert!(!machine.password_may_be_off());
+    }
+
+    #[test]
+    fn test_failed_rollback_command_is_a_failed_rollback() {
+        // A non-zero exit from `sudo cp` or the reload.
+        let failed = rollback_outcome(Err(anyhow!("remote command exited with status 1")));
+        assert!(failed
+            .unwrap_err()
+            .to_string()
+            .starts_with("Rollback failed"));
+
+        let none = rollback_outcome(Ok("OMNYSSH_NO_BACKUP\n".to_string()));
+        assert_eq!(
+            none.unwrap_err().to_string(),
+            "No backup file found for rollback"
+        );
+
+        assert!(rollback_outcome(Ok(String::new())).is_ok());
+    }
+
+    #[test]
+    fn test_rollback_command_reports_missing_backup_with_exit_zero() {
+        // A checked run drops the output of a failing command, marker included.
+        let cmd = build_rollback_command();
+        assert!(cmd.contains("echo \"OMNYSSH_NO_BACKUP\";"));
+        assert!(!cmd.contains("exit 1"));
     }
 
     #[test]

@@ -216,18 +216,25 @@ describe('ipc event router', () => {
       phase: { kind: 'running', step: { index: 3, total: 6, description: 'Verifying key authentication' } }
     });
 
-    applyKeySetupComplete({ hostName: 'web-1', keyPath: '/k/id_ed25519' });
+    applyKeySetupComplete({ hostName: 'web-1', keyPath: '/k/id_ed25519', passwordOff: false });
     expect(get(keySetup)).toEqual({
       hostName: 'web-1',
-      phase: { kind: 'complete', keyPath: '/k/id_ed25519' }
+      phase: { kind: 'complete', keyPath: '/k/id_ed25519', passwordOff: false }
     });
+
+    // A step still queued behind the outcome must not reopen the running view.
+    applyKeySetupProgress({ hostName: 'web-1', step: { index: 6, total: 6, description: 'Final verification' } });
+    expect(get(keySetup)?.phase.kind).toBe('complete');
     dismissKeySetup();
   });
 
   it('a key-setup failure/rollback shows for its host even with no open run', () => {
     dismissKeySetup(); // nothing open
-    applyKeySetupFailed({ hostName: 'db-1', error: 'Connection failed' });
-    expect(get(keySetup)).toEqual({ hostName: 'db-1', phase: { kind: 'failed', error: 'Connection failed' } });
+    applyKeySetupFailed({ hostName: 'db-1', error: 'Connection failed', passwordMayBeOff: false });
+    expect(get(keySetup)).toEqual({
+      hostName: 'db-1',
+      phase: { kind: 'failed', error: 'Connection failed', passwordMayBeOff: false }
+    });
 
     applyKeySetupRollback({ hostName: 'db-1', result: 'Restored.' });
     expect(get(keySetup)).toEqual({ hostName: 'db-1', phase: { kind: 'rolledBack', result: 'Restored.' } });

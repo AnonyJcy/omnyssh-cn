@@ -149,6 +149,12 @@ pub enum CoreEvent {
     KeySetupFailed(HostId, String),
     /// Emergency rollback was triggered (host_id, rollback_result).
     KeySetupRollback(HostId, String),
+    /// Key login works, but password login stayed on: changing the server's
+    /// settings needs sudo without a password (host_id, private_key_path).
+    KeySetupPartial(HostId, std::path::PathBuf),
+    /// Key setup failed and the server's password login may be off: the
+    /// rollback failed or the disable step never answered (host_id, error_message).
+    KeySetupFailedUnsafe(HostId, String),
 
     /// A private key is encrypted and no passphrase is cached for it yet.
     /// Frontends prompt once per key path and call [`crate::ssh::identity::unlock`].

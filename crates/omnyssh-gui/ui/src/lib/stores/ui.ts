@@ -1,4 +1,7 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
+import { dialogs } from './dialogs';
+import { palette } from './palette';
+import { isMac } from '$lib/platform';
 
 // Sticky UI-chrome prefs (tech-gui.md §2, §3.5). Sidebar collapse is manual-only
 // (header button or ⌘B) and must survive restarts: persist canonically via
@@ -96,13 +99,43 @@ export function isPaletteChord(e: KeyboardEvent): boolean {
   return (e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K');
 }
 
-/** The dashboard metric-refresh hotkey (mirrors the TUI's `r`): a bare r/R with no
- *  modifier, ignored while typing in an editable surface so it never eats a keystroke.
- *  Terminal input is never disrupted because the dashboard — the only mounter of this
- *  listener — unmounts whenever a session is active (tech-gui.md §2). */
-export function isRefreshHotkey(e: KeyboardEvent): boolean {
+/** The macOS close-tab chord: ⌘W. The app menu leaves it free; off macOS Ctrl+W stays
+ *  the shell's delete-word. The physical key only when the layout names no ASCII
+ *  character there: on AZERTY it is ⌘Z, on Dvorak ⌘, — but on Greek it is ⌘W. */
+export function isCloseTabChord(e: KeyboardEvent): boolean {
+  if (e.repeat || e.altKey || e.ctrlKey || e.shiftKey || e.isComposing || !e.metaKey) return false;
+  return e.key === 'w' || e.key === 'W' || (e.code === 'KeyW' && !/^[\x21-\x7e]$/.test(e.key));
+}
+
+/** The streamer-mode chord: ⌘⇧S / Ctrl+Shift+S. It fires regardless of focus, like the
+ *  palette's, so it hides addresses at once from wherever the user is. A non-Latin
+ *  layout (or WebKitGTK naming no key) goes by the physical key. */
+export function isStreamerChord(e: KeyboardEvent): boolean {
+  if (e.repeat || e.altKey || e.isComposing || !e.shiftKey || !(e.metaKey || e.ctrlKey)) return false;
+  return e.key === 's' || e.key === 'S' || (e.code === 'KeyS' && !/^[a-z]$/i.test(e.key));
+}
+
+export const streamerChordLabel = isMac ? '⌘⇧S' : 'Ctrl+Shift+S';
+
+/** A bare-letter dashboard hotkey (mirrors the TUI): no modifier, ignored while typing in
+ *  an editable surface so it never eats a keystroke, and while any modal or the command
+ *  palette is open so it never changes the view behind it. Terminal input is never
+ *  disrupted because the dashboard — the only mounter of this listener — unmounts
+ *  whenever a session is active (tech-gui.md §2). */
+function isDashboardKey(e: KeyboardEvent, letter: string): boolean {
   if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return false;
-  if (e.key !== 'r' && e.key !== 'R') return false;
+  // Autofill fires keydown events without a key.
+  if (e.key?.toLowerCase() !== letter || get(dialogs).length > 0 || get(palette).open) return false;
   const t = e.target as HTMLElement | null;
   return !t?.isContentEditable && !/^(input|textarea|select)$/i.test(t?.tagName ?? '');
+}
+
+/** The metric-refresh hotkey, the TUI's `r`. */
+export function isRefreshHotkey(e: KeyboardEvent): boolean {
+  return isDashboardKey(e, 'r');
+}
+
+/** The group-by-tag hotkey, the TUI's `g`. */
+export function isGroupHotkey(e: KeyboardEvent): boolean {
+  return isDashboardKey(e, 'g');
 }

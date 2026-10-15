@@ -59,6 +59,8 @@ pub(crate) struct KnownHostsHandler {
     /// Set when the server leaves no login method OmnySSH has: russh's
     /// NoAuthMethod on disconnect, or a refused key that names only others.
     no_method: Arc<AtomicBool>,
+    /// What the server's version string says about RSA key signatures.
+    rsa_sigs: Arc<Mutex<RsaSigs>>,
     /// The fingerprint of a host key first seen, and recorded, on this connection.
     new_key: Arc<Mutex<Option<String>>>,
     /// Why the host key was turned down, for the user; russh itself only says
@@ -78,6 +80,7 @@ pub(crate) struct KnownHostsHandler {
 struct Link {
     hung_up: Arc<AtomicBool>,
     no_method: Arc<AtomicBool>,
+    rsa_sigs: Arc<Mutex<RsaSigs>>,
     new_key: Arc<Mutex<Option<String>>>,
     refusal: Arc<Mutex<Option<String>>>,
     /// Changes (to closed) once the session is over.
@@ -177,6 +180,19 @@ fn no_common_algorithm(kind: &russh::AlgorithmKind, theirs: &[String]) -> String
 impl client::Handler for KnownHostsHandler {
     type Error = russh::Error;
 
+    async fn kex_done(
+        &mut self,
+        _: Option<&[u8]>,
+        _: &russh::Names,
+        session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        *self
+            .rsa_sigs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = rsa_sigs(session.remote_sshid());
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
@@ -221,13 +237,24 @@ impl client::Handler for KnownHostsHandler {
                 return Ok(true);
             }
             // A previously recorded key changed — refuse; possible MITM.
-            Verdict::Changed(file) => {
+            Verdict::Changed {
+                file,
+                pinned,
+                legacy,
+            } => {
                 tracing::warn!(
                     host = %self.host,
                     port = self.port,
                     "server key mismatch in known_hosts — possible MITM attack, refusing connection"
                 );
-                known_hosts::changed_message(&self.host, self.port, &file, &fingerprint)
+                known_hosts::changed_message(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                    &file,
+                    &pinned,
+                    legacy,
+                )
             }
             // Unreadable or corrupt known_hosts — fail closed rather than
             // accept an unverified key.
@@ -783,6 +810,8 @@ const KEX_ORDER: &[kex::Name] = &[
     kex::ECDH_SHA2_NISTP256,
     kex::ECDH_SHA2_NISTP384,
     kex::ECDH_SHA2_NISTP521,
+    // The one method without SHA-1 that OpenSSH before 5.7 has (RHEL 6).
+    kex::DH_GEX_SHA256,
     kex::EXTENSION_SUPPORT_AS_CLIENT,
     kex::EXTENSION_SUPPORT_AS_SERVER,
     kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
@@ -826,6 +855,9 @@ fn client_config(host: &Host) -> Arc<client::Config> {
             compression: Cow::Borrowed(COMPRESSION_ORDER),
             ..russh::Preferred::DEFAULT
         },
+        // russh asks for 8192 bits, whose exponentiations stall the connecting
+        // task for up to seconds; 4096 is group16's size.
+        gex: client::GexParams::new(2048, 4096, 8192).expect("valid group sizes"),
         // No inactivity timeout: russh skips resetting it on the iteration that
         // sends a keepalive, so a peer that never answers `keepalive@openssh.com`
         // (common in appliance SSH stacks) was torn down after 30 s even while
@@ -995,6 +1027,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
     let link = Link {
         hung_up: Arc::new(AtomicBool::new(false)),
         no_method: Arc::new(AtomicBool::new(false)),
+        rsa_sigs: Arc::default(),
         new_key: Arc::new(Mutex::new(None)),
         refusal: Arc::new(Mutex::new(None)),
         ended,
@@ -1004,6 +1037,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
         port: host.port,
         hung_up: Arc::clone(&link.hung_up),
         no_method: Arc::clone(&link.no_method),
+        rsa_sigs: Arc::clone(&link.rsa_sigs),
         new_key: Arc::clone(&link.new_key),
         refusal: Arc::clone(&link.refusal),
         lends_agent,
@@ -1028,7 +1062,11 @@ where
 {
     let Dialed { handle, link, .. } = first;
     let asking = matches!(passwords, Passwords::Ask(_));
-    let (handle, keys) = authenticate(handle, host, asking, &link.no_method).await?;
+    let rsa_sigs = *link
+        .rsa_sigs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (handle, keys) = authenticate(handle, host, asking, rsa_sigs, &link.no_method).await?;
     let encrypted_key = match keys {
         KeyAuth::Accepted => return Ok(handle),
         KeyAuth::Rejected { encrypted_key } => encrypted_key,
@@ -1351,8 +1389,10 @@ async fn authenticate(
     handle: Handle<KnownHostsHandler>,
     host: &Host,
     user_started: bool,
+    rsa_sigs: RsaSigs,
     no_method: &Arc<AtomicBool>,
 ) -> anyhow::Result<(Handle<KnownHostsHandler>, KeyAuth)> {
+    let rsa = RsaHash::new(rsa_sigs);
     let user = host.user.clone();
     let mut encrypted_key: Option<(String, bool)> = None;
 
@@ -1365,7 +1405,7 @@ async fn authenticate(
             only: host.identities_only,
         };
         let (handle, accepted, turned_down, rsa) =
-            agent_login(handle, &user, user_started, identities, no_method).await?;
+            agent_login(handle, &user, user_started, identities, rsa, no_method).await?;
         if accepted {
             return Ok((handle, KeyAuth::Accepted));
         }
@@ -1374,7 +1414,7 @@ async fn authenticate(
     #[cfg(not(unix))]
     let (turned_down, mut rsa): (Vec<PublicKey>, RsaHash) = {
         let _ = user_started;
-        (Vec::new(), RsaHash::default())
+        (Vec::new(), rsa)
     };
     let mut handle = handle;
 
@@ -1434,13 +1474,23 @@ async fn refused_before(path: &str, turned_down: &[PublicKey]) -> bool {
 
 /// The hash an RSA key signs with on one connection: the best the server lists
 /// in `server-sig-algs`, else rsa-sha2-256, which more servers take (Dropbear
-/// has no rsa-sha2-512); never SHA-1. Asked once: a server that lists nothing
-/// makes every ask wait a second.
-#[derive(Default)]
-struct RsaHash(Option<HashAlg>);
+/// has no rsa-sha2-512). SHA-1 only for a server that lists nothing else, or is
+/// too old to list anything, as PuTTY and ssh(1) before 8.8 sign for it. Asked
+/// once: a server that lists nothing makes every ask wait a second.
+struct RsaHash {
+    sigs: RsaSigs,
+    /// Once known; `Some(None)` signs with SHA-1.
+    hash: Option<Option<HashAlg>>,
+}
 
 impl RsaHash {
-    /// `None` for a key that is not RSA.
+    fn new(sigs: RsaSigs) -> Self {
+        // A server too old for rsa-sha2 sends no server-sig-algs to wait for.
+        let hash = (sigs == RsaSigs::Sha1).then_some(None);
+        Self { sigs, hash }
+    }
+
+    /// `None` for a key that is not RSA, or one signing with SHA-1.
     async fn for_key(
         &mut self,
         handle: &Handle<KnownHostsHandler>,
@@ -1449,12 +1499,57 @@ impl RsaHash {
         if !key.algorithm().is_rsa() {
             return None;
         }
-        if self.0.is_none() {
+        if self.hash.is_none() {
             let listed = time::timeout(AUTH_TIMEOUT, handle.best_supported_rsa_hash()).await;
-            let listed = listed.ok().and_then(Result::ok).flatten().flatten();
-            self.0 = Some(listed.unwrap_or(HashAlg::Sha256));
+            self.hash = Some(match listed.ok().and_then(Result::ok).flatten() {
+                Some(Some(hash)) => Some(hash),
+                // ssh-rsa alone.
+                Some(None) if self.sigs != RsaSigs::Sha2Unlisted => None,
+                _ => Some(HashAlg::Sha256),
+            });
         }
-        self.0
+        self.hash.flatten()
+    }
+}
+
+/// What a server's version string says about RSA key signatures.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+enum RsaSigs {
+    /// Whatever `server-sig-algs` lists.
+    #[default]
+    AsListed,
+    /// OpenSSH before 7.2 or Dropbear before 2020.79: SHA-1 only.
+    Sha1,
+    /// OpenSSH 7.4 lists only ssh-rsa yet takes rsa-sha2, as ssh(1) knows.
+    Sha2Unlisted,
+}
+
+fn rsa_sigs(ident: &[u8]) -> RsaSigs {
+    let ident = String::from_utf8_lossy(ident);
+    let software = ident.splitn(3, '-').nth(2).unwrap_or_default();
+    let version = |rest: &str| -> (u32, u32) {
+        let mut parts = rest.split(|c: char| !c.is_ascii_digit());
+        let major = parts
+            .next()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(u32::MAX);
+        let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        (major, minor)
+    };
+    if let Some(rest) = software.strip_prefix("OpenSSH_") {
+        match version(rest) {
+            v if v < (7, 2) => RsaSigs::Sha1,
+            (7, 4) => RsaSigs::Sha2Unlisted,
+            _ => RsaSigs::AsListed,
+        }
+    } else if let Some(rest) = software.strip_prefix("dropbear_") {
+        if version(rest) < (2020, 79) {
+            RsaSigs::Sha1
+        } else {
+            RsaSigs::AsListed
+        }
+    } else {
+        RsaSigs::AsListed
     }
 }
 
@@ -1615,6 +1710,19 @@ fn refused_agent_keys() -> MutexGuard<'static, HashSet<String>> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
+/// A key's entry in [`refused_agent_keys`]. Some agents never sign with SHA-1,
+/// which only old servers ask for, so that refusal is kept apart: other hosts
+/// still get the key.
+#[cfg(unix)]
+fn refusal_entry(key: &PublicKey, hash: Option<HashAlg>) -> String {
+    let fingerprint = fingerprint(key);
+    if key.algorithm().is_rsa() && hash.is_none() {
+        format!("{fingerprint} ssh-rsa")
+    } else {
+        fingerprint
+    }
+}
+
 /// Runs the agent's keys in a task that owns the connection. A caller that gives
 /// up mid-signature (a poller restarted, a tunnel stopped) then only detaches;
 /// the task itself ends within the signing bound.
@@ -1626,6 +1734,7 @@ async fn agent_login(
     user: &str,
     user_started: bool,
     identities: Identities,
+    mut rsa: RsaHash,
     no_method: &Arc<AtomicBool>,
 ) -> anyhow::Result<(Handle<KnownHostsHandler>, bool, Vec<PublicKey>, RsaHash)> {
     let user = user.to_string();
@@ -1633,7 +1742,6 @@ async fn agent_login(
     tokio::spawn(async move {
         let mut handle = handle;
         let mut turned_down = Vec::new();
-        let mut rsa = RsaHash::default();
         let accepted = try_agent_auth(
             &mut handle,
             &user,
@@ -1690,10 +1798,10 @@ async fn try_agent_auth(
         stalled: Arc::clone(&stalled),
     };
     for pubkey in identities.order(listed) {
-        if !user_started && refused_agent_keys().contains(&fingerprint(&pubkey)) {
+        let hash = rsa.for_key(handle, &pubkey).await;
+        if !user_started && refused_agent_keys().contains(&refusal_entry(&pubkey, hash)) {
             continue;
         }
-        let hash = rsa.for_key(handle, &pubkey).await;
         // Fresh per key: a refusal must not cut the next key's attempt short.
         let failed = Arc::new(tokio::sync::Notify::new());
         signer.failed = Arc::clone(&failed);
@@ -1781,14 +1889,14 @@ impl russh::Signer for AgentSigner {
                 }
             }
         }
-        let fingerprint = fingerprint(&key.public_key());
+        let entry = refusal_entry(&key.public_key(), hash_alg);
         match signed {
             Some(data) => {
-                refused_agent_keys().remove(&fingerprint);
+                refused_agent_keys().remove(&entry);
                 Ok(data)
             }
             None => {
-                refused_agent_keys().insert(fingerprint);
+                refused_agent_keys().insert(entry);
                 self.refused = true;
                 self.failed.notify_one();
                 Ok(to_sign)
@@ -2208,6 +2316,33 @@ mod tests {
         assert_eq!(
             no_common_algorithm(&russh::AlgorithmKind::Mac, &[]),
             "SSH connection failed: no common MAC"
+        );
+    }
+
+    #[test]
+    fn only_servers_before_rsa_sha2_sign_with_sha1() {
+        for old in [
+            "SSH-2.0-OpenSSH_5.3",
+            "SSH-2.0-OpenSSH_6.6.1p1 Ubuntu-2ubuntu2",
+            "SSH-2.0-OpenSSH_7.1",
+            "SSH-2.0-dropbear_2019.78",
+        ] {
+            assert_eq!(rsa_sigs(old.as_bytes()), RsaSigs::Sha1, "{old}");
+        }
+        for new in [
+            "SSH-2.0-OpenSSH_7.2",
+            "SSH-2.0-OpenSSH_7.5",
+            "SSH-2.0-OpenSSH_10.2p1 Ubuntu-2ubuntu3.6",
+            "SSH-2.0-dropbear_2020.79",
+            "SSH-2.0-Go",
+            "SSH-2.0-OpenSSH_for_Windows_9.5",
+            "garbage",
+        ] {
+            assert_eq!(rsa_sigs(new.as_bytes()), RsaSigs::AsListed, "{new}");
+        }
+        assert_eq!(
+            rsa_sigs(b"SSH-2.0-OpenSSH_7.4p1 Debian-10+deb9u7"),
+            RsaSigs::Sha2Unlisted
         );
     }
 

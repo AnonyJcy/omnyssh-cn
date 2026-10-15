@@ -157,11 +157,11 @@ export function applyKeySetupProgress(payload: KeySetupProgress): void {
 }
 
 export function applyKeySetupComplete(payload: KeySetupComplete): void {
-  keySetup.set(reduceComplete(payload.hostName, payload.keyPath));
+  keySetup.set(reduceComplete(payload.hostName, payload.keyPath, payload.passwordOff));
 }
 
 export function applyKeySetupFailed(payload: KeySetupFailed): void {
-  keySetup.set(reduceFailed(payload.hostName, payload.error));
+  keySetup.set(reduceFailed(payload.hostName, payload.error, payload.passwordMayBeOff));
 }
 
 export function applyKeySetupRollback(payload: KeySetupRollback): void {

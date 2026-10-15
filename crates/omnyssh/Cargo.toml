@@ -18,11 +18,12 @@ name = "omny"
 path = "src/main.rs"
 
 [dependencies]
-omnyssh-core = { path = "../omnyssh-core" }
+omnyssh-core = { path = "../omnyssh-core", version = "1.1.5" }
 
 # TUI
 ratatui = "0.29"
 crossterm = "0.28"
+unicode-width = "0.2"
 
 tokio = { workspace = true }
 

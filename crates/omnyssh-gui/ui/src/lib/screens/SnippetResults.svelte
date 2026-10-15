@@ -1,11 +1,11 @@
 <script lang="ts">
   // Per-host snippet results (tech-gui.md §2.2), driven by the `snippetRun` store:
   // each target host shows pending → ok/failed with its output. Colour lives only in
-  // the status dot, per the brandbook. Rendered whenever a run is active.
+  // the status dot, per the brandbook. Rendered while a run is active and not dismissed.
   import { StatusDot, Button, type Status } from '$lib/theme';
   import Modal from '$lib/components/Modal.svelte';
   import { snippetRun, clearRun, type SnippetResultEntry } from '$lib/stores/snippets';
-  import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
+  import { streamerMode, displayHostTitle, maskText } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
 
   function dot(entry: SnippetResultEntry): Status {
@@ -14,12 +14,12 @@
   }
 
   function state(entry: SnippetResultEntry): string {
-    if (entry.pending) return 'running';
-    return entry.ok ? 'ok' : 'failed';
+    if (entry.pending) return $t('snippet_results.state_running');
+    return entry.ok ? $t('snippet_results.state_ok') : $t('snippet_results.state_failed');
   }
 </script>
 
-{#if $snippetRun}
+{#if $snippetRun && !$snippetRun.dismissed}
   {@const run = $snippetRun}
   <Modal label={$t('snippet_results.title', { name: run.snippetName })} onClose={clearRun}>
     <header class="border-b border-default px-5 py-3.5">
@@ -37,10 +37,12 @@
           {#if entry.pending}
             <p class="px-3 py-2 text-xs text-faint">{$t('snippet_results.running')}</p>
           {:else if entry.output.trim()}
+            <!-- A failed entry's output is the backend's error (connect or command), so it
+                 is masked; a success is the command's own stdout, shown as it came. -->
             <pre
               class="max-h-52 select-text overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs {entry.ok
                 ? 'text-muted'
-                : 'text-status-crit'}">{entry.output}</pre>
+                : 'text-status-crit'}">{entry.ok ? entry.output : $maskText(entry.output)}</pre>
           {:else}
             <p class="px-3 py-2 text-xs text-faint">{$t('snippet_results.no_output')}</p>
           {/if}

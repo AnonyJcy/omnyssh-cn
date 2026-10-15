@@ -1,8 +1,9 @@
 <script lang="ts">
   // The ⌘K overlay and the host-picker, one component in two modes (tech-gui.md §2,
-  // 1.3). Navigator: jump to an open session or open a host (default: a shell). Picker:
-  // hand a chosen host back to its caller (the spawner buttons). Keyboard-first — type
-  // to filter, ↑/↓ to move, ↵ to select, esc to dismiss. Glass/blur per the brandbook.
+  // 1.3). Navigator: jump to an open session, open a host (default: a shell), or run a
+  // command. Picker: hand a chosen host back to its caller (the spawner buttons).
+  // Keyboard-first — type to filter, ↑/↓ to move, ↵ to select, esc to dismiss.
+  // Glass/blur per the brandbook.
   import { tick } from 'svelte';
   import { Icon, StatusDot } from '$lib/theme';
   import { palette, paletteItems, paletteSignature, nextIndex, hostStatusDot } from '$lib/stores/palette';
@@ -12,32 +13,32 @@
   import { activeEntity } from '$lib/stores/activeEntity';
   import { spawnSession } from '$lib/stores/navigation';
   import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
-  import { isPaletteChord } from '$lib/stores/ui';
-  import { t } from '$lib/i18n';
+  import { isPaletteChord, streamerChordLabel } from '$lib/stores/ui';
+  import { locale, t } from '$lib/i18n';
 
   let inputEl = $state<HTMLInputElement>();
   let listEl = $state<HTMLUListElement>();
   let query = $state('');
   let selected = $state(0);
 
-  const items = $derived(paletteItems($palette.mode, $hosts, $sessions, query));
+  const items = $derived(paletteItems($palette.mode, $hosts, $sessions, query, $locale));
   // A value-stable key over the result set: unchanged by a background status flip (same
   // ids, new objects), so the reset effect below can ignore those (see the effect).
   const itemsSignature = $derived(paletteSignature(items));
   const firstSession = $derived(items.findIndex((it) => it.kind === 'session'));
   const firstHost = $derived(items.findIndex((it) => it.kind === 'host'));
+  const firstCommand = $derived(items.findIndex((it) => it.kind === 'command'));
 
   const placeholder = $derived(
     $palette.mode === 'pickHost' ? $t('palette.pick_host_placeholder') : $t('palette.search_placeholder')
   );
+  // The navigator always lists its commands, so only a query can empty it.
   const emptyMessage = $derived(
     $palette.mode === 'pickHost'
       ? query
         ? $t('palette.no_matching_hosts')
         : $t('palette.no_hosts_configured')
-      : query
-        ? $t('palette.no_matches')
-        : $t('palette.no_hosts_or_sessions')
+      : $t('palette.no_matches')
   );
 
   // Focus returns here when the overlay closes, so a keyboard user is not dropped to
@@ -81,6 +82,9 @@
     if (!item) return;
     if (item.kind === 'session') {
       activeEntity.activateSession(item.session.id);
+      palette.close();
+    } else if (item.kind === 'command') {
+      streamerMode.toggle();
       palette.close();
     } else if ($palette.mode === 'pickHost') {
       palette.choose(item.host);
@@ -178,14 +182,16 @@
         {#if items.length === 0}
           <li class="px-3 py-6 text-center text-sm text-muted">{emptyMessage}</li>
         {:else}
-          <!-- Keyed by position: rows are stateless, and host names are not guaranteed
-               unique, so a name key could throw each_key_duplicate. -->
+          <!-- Keyed by position: rows are stateless. -->
           {#each items as item, i (i)}
             {#if $palette.mode === 'navigate' && i === firstSession}
               <li class={sectionHead}>{$t('palette.sessions')}</li>
             {/if}
             {#if $palette.mode === 'navigate' && i === firstHost}
               <li class={sectionHead}>{$t('palette.hosts')}</li>
+            {/if}
+            {#if i === firstCommand}
+              <li class={sectionHead}>{$t('palette.commands')}</li>
             {/if}
             <li>
               <button
@@ -200,6 +206,12 @@
                   <StatusDot status={sessionStatusDot[item.session.status]} />
                   <Icon name={item.session.kind} size={16} />
                   <span class="min-w-0 flex-1 truncate">{displayHostTitle(sessionLabel(item.session), $streamerMode)}</span>
+                {:else if item.kind === 'command'}
+                  <Icon name="eye" size={16} />
+                  <span class="min-w-0 flex-1 truncate">{$t('palette.toggle_streamer')}</span>
+                  <span class="shrink-0 font-mono text-xs {selected === i ? '' : 'text-faint'}">
+                    {streamerChordLabel}
+                  </span>
                 {:else}
                   <StatusDot status={hostStatusDot($statuses.get(item.host.name))} />
                   <span class="min-w-0 flex-1 truncate font-medium">{displayHostTitle(item.host.name, $streamerMode, item.host.hostname)}</span>

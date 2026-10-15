@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+# Avoid a scheduled run racing a manually dispatched sync on the same branch.
+concurrency:
+  group: sync-upstream-zh-cn
+  cancel-in-progress: false
+
 jobs:
   sync:
     name: Sync with upstream repository
@@ -30,10 +35,25 @@ jobs:
           git remote add upstream https://github.com/timhartmann7/omnyssh.git || true
           git fetch upstream main --no-tags
           
-          # Attempt auto-merge of upstream main into zh-cn
-          git merge upstream/main -m "chore(sync): merge upstream changes into zh-cn" || {
-            echo "::error::Merge conflict detected! Manual resolution required."
+          # Never prefer either side blindly: that could remove translations or fixes.
+          if ! git merge upstream/main -m "chore(sync): merge upstream changes into zh-cn"; then
+            conflicts=$(git diff --name-only --diff-filter=U)
+            if [ -n "$conflicts" ]; then
+              echo "::error::Upstream merge conflicts require manual resolution; zh-cn was not pushed."
+              while IFS= read -r path; do
+                echo "::error file=$path::Resolve upstream changes while preserving zh-cn customizations."
+              done <<< "$conflicts"
+              {
+                echo '### Upstream sync stopped: merge conflicts'
+                echo 'The remote zh-cn branch was not changed. Resolve these files locally, then commit and push the merge before retrying:'
+                echo '```text'
+                printf '%s\n' "$conflicts"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error::Upstream merge failed without file conflicts; inspect the Git error above."
+            fi
             exit 1
-          }
+          fi
           
           git push origin zh-cn

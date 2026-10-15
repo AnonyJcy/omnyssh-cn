@@ -4,7 +4,8 @@
 //! a tray it would have nowhere to come back from.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{mpsc, Mutex, PoisonError};
+use std::time::Duration;
 
 use tauri::menu::{Menu, MenuEvent, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -54,6 +55,13 @@ pub static REVEALED: AtomicBool = AtomicBool::new(false);
 /// down, so a restore that lands while the window manager still calls it minimized
 /// does not send it straight back.
 static MINIMIZED: AtomicBool = AtomicBool::new(false);
+
+/// Set by the tray's and the app menu's Quit, taken by the close it starts: that close
+/// ends the app instead of hiding into the tray.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// How long a page has to answer before a close it holds up goes through anyway.
+const PAGE_ANSWER: Duration = Duration::from_secs(5);
 
 fn behavior() -> Behavior {
     *BEHAVIOR.lock().unwrap_or_else(PoisonError::into_inner)
@@ -265,11 +273,66 @@ pub fn reveal(app: &AppHandle) {
     }
 }
 
+/// The tray's and the app menu's Quit, as the window's own close: a page listening for
+/// it asks first when terminals, transfers, tunnels or snippet runs are live, and with
+/// no listener the window closes, which ends the app.
+fn request_quit(app: &AppHandle) {
+    // Never `prevent_exit` anywhere: it would stop these exits too.
+    let Some(window) = app.get_webview_window("main") else {
+        return app.exit(0);
+    };
+    // Still coming up, so nothing is live yet, and the page takes a hidden window's
+    // close for one into the tray.
+    if !REVEALED.load(Ordering::Acquire) {
+        return app.exit(0);
+    }
+    QUITTING.store(true, Ordering::Release);
+    // Out of the tray or the Dock: the question has to be seen.
+    reveal(app);
+    if window.close().is_err() {
+        QUITTING.store(false, Ordering::Release);
+        app.exit(0);
+    }
+}
+
+/// Set by the page while its close handler is registered (`routes/+layout.svelte`).
+const CLOSE_GUARD: &str = "window.__omnysshAsksOnClose === true ? 1 : 0";
+
+/// Once the page listens for closes Tauri leaves every close to it, so a hung page
+/// would hold the window open for good. `destroy` skips `CloseRequested`.
+fn close_unless_page_answers(window: &Window) {
+    let Some(webview) = window.get_webview_window(window.label()) else {
+        return;
+    };
+    let (answered, answer) = mpsc::channel();
+    // Only the page's own flag counts: a dead web process answers every script at once,
+    // with an empty result, while its stale listener still holds the close.
+    let _ = webview.eval_with_callback(CLOSE_GUARD, move |result| {
+        if result == "1" {
+            let _ = answered.send(());
+        }
+    });
+    let window = window.clone();
+    // Never on the main thread: the answer arrives there.
+    std::thread::spawn(move || {
+        if answer.recv_timeout(PAGE_ANSWER).is_err() {
+            let _ = window.destroy();
+        }
+    });
+}
+
 pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         SHOW_ID => reveal(app),
-        // Never `prevent_exit` anywhere: it would stop this too.
-        QUIT_ID => app.exit(0),
+        QUIT_ID => request_quit(app),
+        #[cfg(target_os = "macos")]
+        crate::menu::QUIT_ID => request_quit(app),
+        #[cfg(target_os = "macos")]
+        crate::menu::CLOSE_WINDOW_ID => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.close();
+            }
+        }
         _ => {}
     }
 }
@@ -277,9 +340,14 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     let behavior = behavior();
     match event {
-        WindowEvent::CloseRequested { api, .. } if behavior.closes_to_tray() => {
-            api.prevent_close();
-            let _ = window.hide();
+        WindowEvent::CloseRequested { api, .. } => {
+            let quitting = QUITTING.swap(false, Ordering::AcqRel);
+            if behavior.closes_to_tray() && !quitting {
+                api.prevent_close();
+                let _ = window.hide();
+            } else {
+                close_unless_page_answers(window);
+            }
         }
         // Minimizing arrives as a resize, on GTK with the size unchanged.
         WindowEvent::Resized(_) => {

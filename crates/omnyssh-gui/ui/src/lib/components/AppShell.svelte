@@ -13,7 +13,14 @@
   import PasswordPrompt from '$lib/screens/PasswordPrompt.svelte';
   import UpdateBanner from './UpdateBanner.svelte';
   import { support } from '$lib/stores/support';
-  import { sidebarCollapsed, isCollapseChord } from '$lib/stores/ui';
+  import { get } from 'svelte/store';
+  import { sidebarCollapsed, isCollapseChord, isCloseTabChord, isStreamerChord } from '$lib/stores/ui';
+  import { activeEntity } from '$lib/stores/activeEntity';
+  import { palette } from '$lib/stores/palette';
+  import { dialogs } from '$lib/stores/dialogs';
+  import { closeSession } from '$lib/stores/navigation';
+  import { isMac } from '$lib/platform';
+  import { streamerMode } from '$lib/stores/streamer';
 
   let { children }: { children: Snippet } = $props();
 
@@ -21,6 +28,16 @@
     if (isCollapseChord(e)) {
       e.preventDefault();
       sidebarCollapsed.toggle();
+    } else if (isMac && isCloseTabChord(e)) {
+      // As the tab's own close button; never the window, which has ⌘⇧W.
+      e.preventDefault();
+      // The palette is not a dialog, but it covers the session all the same.
+      if (get(palette).open) return;
+      const active = get(activeEntity);
+      if (get(dialogs).length === 0 && active.kind === 'session') closeSession(active.id);
+    } else if (isStreamerChord(e)) {
+      e.preventDefault();
+      streamerMode.toggle();
     }
   }
 </script>
