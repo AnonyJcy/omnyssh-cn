@@ -9,6 +9,7 @@
   import { refreshInterval, driveMetricsRefresh } from '$lib/stores/settings';
   import { locale } from '$lib/i18n';
   import { trayBehavior, driveTray } from '$lib/stores/tray';
+  import { clipboardPrefs } from '$lib/stores/clipboard';
   import { dashboardView } from '$lib/stores/dashboardView';
   import { lastError } from '$lib/stores/notifications';
   import { confirmQuit, handleCloseRequested, quitPrompt } from '$lib/stores/quit';
@@ -27,6 +28,7 @@
     void refreshInterval.hydrate();
     void locale.hydrate();
     void trayBehavior.hydrate();
+    void clipboardPrefs.hydrate();
     void dashboardView.hydrate();
     void confirmQuit.hydrate();
     // Force a metric refresh on the user's interval; re-arms when the interval changes.
