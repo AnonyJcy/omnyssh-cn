@@ -401,7 +401,57 @@ export const en = {
   'common.delete': 'Delete',
   'common.confirm': 'Confirm',
   'common.loading': 'Loading…',
-  'common.error': 'Error'
+  'common.error': 'Error',
+
+  // Terminal Search (PR #152)
+  'terminal.find': 'Find',
+  'terminal.find_in_terminal': 'Find in terminal ({shortcut})',
+  'terminal.find_aria_label': 'Find in terminal',
+  'terminal.find_match_case': 'Match case',
+  'terminal.find_use_regex': 'Use regular expression',
+  'terminal.find_prev': 'Previous match (Shift+Enter)',
+  'terminal.find_prev_aria': 'Previous match',
+  'terminal.find_next': 'Next match (Enter)',
+  'terminal.find_next_aria': 'Next match',
+  'terminal.find_close': 'Close (Esc)',
+  'terminal.find_close_aria': 'Close find',
+  'terminal.find_no_matches': 'No results',
+  'terminal.find_invalid_regex': 'Invalid pattern',
+  'terminal.find_over_1000': '{count} matches',
+  'terminal.find_match_count': '{index} of {count}',
+
+  // Terminal Copy & Paste (PR #162)
+  'terminal.menu_copy': 'Copy',
+  'terminal.menu_paste': 'Paste',
+  'terminal.menu_copy_all': 'Copy all',
+  'terminal.menu_select_all': 'Select all',
+  'terminal.paste_confirm_label': 'Confirm paste',
+  'terminal.paste_confirm_title': 'Paste {count} lines?',
+  'terminal.paste_confirm_desc': 'This text contains a line break, so the shell may run it as soon as it lands.',
+  'terminal.nothing_to_copy': 'Nothing to copy',
+  'terminal.copied_lines': 'Copied {count} lines',
+
+  // Settings: Copy & Paste (PR #162)
+  'settings.clipboard': 'Copy & paste',
+  'settings.clipboard_reset': 'Reset to PuTTY defaults',
+  'settings.copy_on_select': 'Copy on select',
+  'settings.copy_on_select_desc': 'Selecting text in a terminal copies it right away — drag, double-click a word, triple-click a line.',
+  'settings.right_click': 'Right-click',
+  'settings.right_click_paste': 'Paste',
+  'settings.right_click_paste_desc': 'Always pastes the clipboard, as in PuTTY.',
+  'settings.right_click_copyOrPaste': 'Copy or paste',
+  'settings.right_click_copyOrPaste_desc': 'Copies the selection if there is one, otherwise pastes — as in Windows Terminal.',
+  'settings.right_click_menu': 'Menu',
+  'settings.right_click_menu_desc': 'Opens a menu: Copy, Paste, Copy all, Select all.',
+  'settings.right_click_off': 'Nothing',
+  'settings.right_click_off_desc': 'Right-click does nothing in the terminal.',
+  'settings.middle_click_paste': 'Middle-click pastes',
+  'settings.middle_click_paste_desc': 'Click the mouse wheel to paste the clipboard.',
+  'settings.trim_trailing_spaces': 'Trim trailing spaces',
+  'settings.trim_trailing_spaces_desc': 'Strip the padding at the end of each copied line.',
+  'settings.confirm_multi_line_paste': 'Confirm multi-line paste',
+  'settings.confirm_multi_line_paste_desc': 'Ask first when a paste contains a line break, since the shell would run it immediately.',
+  'settings.clipboard_shortcuts_hint': 'Copy: {copy}. Paste: {paste}. Copy all (the whole scrollback): {copyAll}, or Ctrl+right-click for the menu. When a remote app uses the mouse (vim, tmux, htop), hold Shift to select or paste.'
 } as const;
 
 export type TranslationKey = keyof typeof en;

@@ -21,6 +21,7 @@
   import { palette } from '$lib/stores/palette';
   import { isStreamerChord } from '$lib/stores/ui';
   import { activeEntity } from '$lib/stores/activeEntity';
+  import { t } from '$lib/i18n';
   import {
     terminalOpen,
     terminalWrite,
@@ -159,12 +160,12 @@
     if (!term) return;
     const text = bufferText(term.buffer.active, isWindows ? '\r\n' : '\n');
     if (!text) {
-      flash('Nothing to copy');
+      flash($t('terminal.nothing_to_copy'));
       return;
     }
     const lines = text.split(isWindows ? '\r\n' : '\n').length;
     clipboardWriteText(text).then(
-      () => flash(`Copied ${lines} line${lines === 1 ? '' : 's'}`),
+      () => flash($t('terminal.copied_lines', { count: lines })),
       (err) => lastError.set(`Copy failed: ${errText(err)}`)
     );
   }
@@ -594,11 +595,11 @@
     class="fixed z-40 w-44 overflow-hidden rounded-xl border border-default bg-surface-raised py-1 text-sm shadow-soft"
     style="left: {menu.x}px; top: {menu.y}px;"
   >
-    {@render menuItem('Copy', isMac ? '⌘C' : 'Ctrl+Shift+C', menu.hasSelection, () => menuAction('copy'))}
-    {@render menuItem('Paste', isMac ? '⌘V' : 'Ctrl+Shift+V', true, () => menuAction('paste'))}
+    {@render menuItem($t('terminal.menu_copy'), isMac ? '⌘C' : 'Ctrl+Shift+C', menu.hasSelection, () => menuAction('copy'))}
+    {@render menuItem($t('terminal.menu_paste'), isMac ? '⌘V' : 'Ctrl+Shift+V', true, () => menuAction('paste'))}
     <div class="my-1 border-t border-default"></div>
-    {@render menuItem('Copy all', isMac ? '⇧⌘A' : 'Ctrl+Shift+A', true, () => menuAction('copyAll'))}
-    {@render menuItem('Select all', '', true, () => menuAction('selectAll'))}
+    {@render menuItem($t('terminal.menu_copy_all'), isMac ? '⇧⌘A' : 'Ctrl+Shift+A', true, () => menuAction('copyAll'))}
+    {@render menuItem($t('terminal.menu_select_all'), '', true, () => menuAction('selectAll'))}
   </div>
 {/if}
 
@@ -616,11 +617,11 @@
 {/snippet}
 
 {#if pendingPaste !== null}
-  <Modal label="Confirm paste" onClose={() => (pendingPaste = null)}>
+  <Modal label={$t('terminal.paste_confirm_label')} onClose={() => (pendingPaste = null)}>
     <div class="p-5">
-      <h2 class="text-sm font-semibold">Paste {lineCount(pendingPaste)} line{lineCount(pendingPaste) === 1 ? '' : 's'}?</h2>
+      <h2 class="text-sm font-semibold">{$t('terminal.paste_confirm_title', { count: lineCount(pendingPaste) })}</h2>
       <p class="mt-1 text-xs text-muted">
-        This text contains a line break, so the shell may run it as soon as it lands.
+        {$t('terminal.paste_confirm_desc')}
       </p>
       <pre
         class="mt-3 max-h-48 overflow-auto rounded-lg bg-surface-inset p-3 font-mono text-xs leading-relaxed">{pendingPaste.length > 4000
@@ -632,7 +633,7 @@
           class="rounded-full px-4 py-1.5 text-sm text-muted transition hover:bg-surface-inset hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           onclick={() => (pendingPaste = null)}
         >
-          Cancel
+          {$t('common.cancel')}
         </button>
         <!-- svelte-ignore a11y_autofocus -->
         <button
@@ -641,7 +642,7 @@
           class="rounded-full bg-accent px-4 py-1.5 text-sm text-accent-fg transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           onclick={confirmPaste}
         >
-          Paste
+          {$t('terminal.menu_paste')}
         </button>
       </div>
     </div>

@@ -77,20 +77,10 @@
     }
   }
 
-  const RIGHT_CLICK_LABELS: Record<RightClick, string> = {
-    paste: 'Paste',
-    copyOrPaste: 'Copy or paste',
-    menu: 'Menu',
-    off: 'Nothing'
-  };
-  const RIGHT_CLICK_HINTS: Record<RightClick, string> = {
-    paste: 'Always pastes the clipboard, as in PuTTY.',
-    copyOrPaste: 'Copies the selection if there is one, otherwise pastes — as in Windows Terminal.',
-    menu: 'Opens a menu: Copy, Paste, Copy all, Select all.',
-    off: 'Right-click does nothing in the terminal.'
-  };
+  const RIGHT_CLICK_OPTIONS: RightClick[] = ['paste', 'copyOrPaste', 'menu', 'off'];
   const copyKeys = isMac ? 'Cmd+C, Ctrl+Insert' : 'Ctrl+Shift+C, Ctrl+Insert';
   const pasteKeys = isMac ? 'Cmd+V, Shift+Insert' : 'Ctrl+Shift+V, Shift+Insert';
+  const copyAllKey = isMac ? '⇧⌘A' : 'Ctrl+Shift+A';
 
   const seg =
     'rounded-lg px-3 py-1.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
@@ -186,19 +176,19 @@
     <!-- Terminal copy & paste: PuTTY-style by default (stores/clipboard). -->
     <Surface class="p-5">
       <div class="mb-3 flex items-center justify-between gap-4">
-        <h2 class="text-sm font-semibold">Copy &amp; paste</h2>
+        <h2 class="text-sm font-semibold">{$t('settings.clipboard')}</h2>
         <button
           type="button"
           class="text-xs text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           onclick={() => clipboardPrefs.reset()}
         >
-          Reset to PuTTY defaults
+          {$t('settings.clipboard_reset')}
         </button>
       </div>
       <div class="space-y-4">
         {@render traySwitch(
-          'Copy on select',
-          'Selecting text in a terminal copies it right away — drag, double-click a word, triple-click a line.',
+          $t('settings.copy_on_select'),
+          $t('settings.copy_on_select_desc'),
           $clipboardPrefs.copyOnSelect,
           true,
           () => clipboardPrefs.update({ copyOnSelect: !$clipboardPrefs.copyOnSelect })
@@ -206,18 +196,18 @@
 
         <div class="flex items-center justify-between gap-4 border-t border-default pt-4">
           <div class="min-w-0">
-            <p class="text-sm">Right-click</p>
-            <p class="text-xs text-muted">{RIGHT_CLICK_HINTS[$clipboardPrefs.rightClick]}</p>
+            <p class="text-sm">{$t('settings.right_click')}</p>
+            <p class="text-xs text-muted">{$t(`settings.right_click_${$clipboardPrefs.rightClick}_desc`)}</p>
           </div>
           <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
-            {#each Object.keys(RIGHT_CLICK_LABELS) as RightClick[] as option (option)}
+            {#each RIGHT_CLICK_OPTIONS as option (option)}
               <button
                 type="button"
                 class="{seg} {segState($clipboardPrefs.rightClick === option)}"
                 aria-pressed={$clipboardPrefs.rightClick === option}
                 onclick={() => clipboardPrefs.update({ rightClick: option })}
               >
-                {RIGHT_CLICK_LABELS[option]}
+                {$t(`settings.right_click_${option}`)}
               </button>
             {/each}
           </div>
@@ -225,8 +215,8 @@
 
         <div class="border-t border-default pt-4">
           {@render traySwitch(
-            'Middle-click pastes',
-            'Click the mouse wheel to paste the clipboard.',
+            $t('settings.middle_click_paste'),
+            $t('settings.middle_click_paste_desc'),
             $clipboardPrefs.middleClickPaste,
             true,
             () => clipboardPrefs.update({ middleClickPaste: !$clipboardPrefs.middleClickPaste })
@@ -234,8 +224,8 @@
         </div>
 
         {@render traySwitch(
-          'Trim trailing spaces',
-          'Strip the padding at the end of each copied line.',
+          $t('settings.trim_trailing_spaces'),
+          $t('settings.trim_trailing_spaces_desc'),
           $clipboardPrefs.trimTrailingWhitespace,
           true,
           () =>
@@ -243,8 +233,8 @@
         )}
 
         {@render traySwitch(
-          'Confirm multi-line paste',
-          'Ask first when a paste contains a line break, since the shell would run it immediately.',
+          $t('settings.confirm_multi_line_paste'),
+          $t('settings.confirm_multi_line_paste_desc'),
           $clipboardPrefs.confirmMultiLinePaste,
           true,
           () =>
@@ -252,9 +242,7 @@
         )}
 
         <p class="border-t border-default pt-4 text-xs text-muted">
-          Copy: {copyKeys}. Paste: {pasteKeys}. Copy all (the whole scrollback):
-          {isMac ? 'Cmd+Shift+A' : 'Ctrl+Shift+A'}, or Ctrl+right-click for the menu. When a
-          remote app uses the mouse (vim, tmux, htop), hold Shift to select or paste.
+          {$t('settings.clipboard_shortcuts_hint', { copy: copyKeys, paste: pasteKeys, copyAll: copyAllKey })}
         </p>
       </div>
     </Surface>

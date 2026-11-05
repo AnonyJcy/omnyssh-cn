@@ -10,6 +10,7 @@
   import { searchColours } from '$lib/theme/terminalTheme';
   import Icon from '$lib/theme/Icon.svelte';
   import { isMac } from '$lib/platform';
+  import { t, locale } from '$lib/i18n';
   import { findLabel, type FindResult } from './terminalFind';
   import { isFindShortcut } from './terminalInput';
 
@@ -136,9 +137,9 @@
     bind:value={query}
     onkeydown={onKeydown}
     type="text"
-    placeholder="Find"
-    title="Find in terminal ({shortcut})"
-    aria-label="Find in terminal"
+    placeholder={$t('terminal.find')}
+    title={$t('terminal.find_in_terminal', { shortcut })}
+    aria-label={$t('terminal.find_aria_label')}
     autocomplete="off"
     autocapitalize="off"
     spellcheck="false"
@@ -148,13 +149,13 @@
     class="min-w-[5.5rem] whitespace-nowrap pr-1 text-right text-xs tabular-nums {noMatches
       ? 'text-status-crit'
       : 'text-muted'}"
-    aria-live="polite">{findLabel(result)}</span
+    aria-live="polite">{findLabel(result, $locale)}</span
   >
   <button
     type="button"
     class="{iconButton} font-mono text-xs {caseSensitive ? toggleOn : ''}"
-    title="Match case"
-    aria-label="Match case"
+    title={$t('terminal.find_match_case')}
+    aria-label={$t('terminal.find_match_case')}
     aria-pressed={caseSensitive}
     onmousedown={keepFocus}
     onclick={() => (caseSensitive = !caseSensitive)}>Aa</button
@@ -162,8 +163,8 @@
   <button
     type="button"
     class="{iconButton} font-mono text-xs {regex ? toggleOn : ''}"
-    title="Use regular expression"
-    aria-label="Use regular expression"
+    title={$t('terminal.find_use_regex')}
+    aria-label={$t('terminal.find_use_regex')}
     aria-pressed={regex}
     onmousedown={keepFocus}
     onclick={() => (regex = !regex)}>.*</button
@@ -171,8 +172,8 @@
   <button
     type="button"
     class={iconButton}
-    title="Previous match (Shift+Enter)"
-    aria-label="Previous match"
+    title={$t('terminal.find_prev')}
+    aria-label={$t('terminal.find_prev_aria')}
     disabled={!canStep}
     onmousedown={keepFocus}
     onclick={() => find(true)}
@@ -182,8 +183,8 @@
   <button
     type="button"
     class={iconButton}
-    title="Next match (Enter)"
-    aria-label="Next match"
+    title={$t('terminal.find_next')}
+    aria-label={$t('terminal.find_next_aria')}
     disabled={!canStep}
     onmousedown={keepFocus}
     onclick={() => find(false)}
@@ -193,8 +194,8 @@
   <button
     type="button"
     class={iconButton}
-    title="Close (Esc)"
-    aria-label="Close find"
+    title={$t('terminal.find_close')}
+    aria-label={$t('terminal.find_close_aria')}
     onmousedown={keepFocus}
     onclick={onclose}
   >

@@ -416,3 +416,41 @@ test('中文退出摘要保留终端和隧道，默认取消防止误按 Enter �
   await quit.getByRole('button', { name: '退出', exact: true }).click();
   await expect.poll(() => commands(page)).toContain('plugin:window|destroy');
 });
+
+test('中文设置页面包含复制与粘贴配置面板，右键行为与PuTTY默认值切换正常', async ({ page }) => {
+  await boot(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '复制与粘贴', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '恢复 PuTTY 默认设置', exact: true })).toBeVisible();
+  await expect(page.getByText('选中文本自动复制', { exact: true })).toBeVisible();
+  await expect(page.getByText('鼠标右键操作', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '粘贴', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: '复制或粘贴', exact: true }).click();
+  await expect(page.getByRole('button', { name: '复制或粘贴', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('有选中文本时复制，无选中文本时粘贴（与 Windows Terminal 一致）。')).toBeVisible();
+
+  await page.getByRole('button', { name: '恢复 PuTTY 默认设置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '粘贴', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('始终粘贴剪贴板内容（与 PuTTY 一致）。')).toBeVisible();
+});
+
+test('中文终端搜索栏支持快捷键打开，显示中文查找占位符与关闭按钮', async ({ page }) => {
+  await boot(page);
+  await page.getByTitle('终端 (web-1)', { exact: true }).click();
+  await expect(page.locator('.xterm-rows')).toContainText('ready>');
+  await page.locator('.xterm-helper-textarea').focus();
+
+  await page.keyboard.press('Control+Shift+F');
+  const search = page.getByRole('search');
+  await expect(search).toBeVisible();
+  const input = search.getByPlaceholder('查找', { exact: true });
+  await expect(input).toBeVisible();
+  await expect(input).toBeFocused();
+
+  await input.fill('ready');
+  await expect(search).toContainText(/1 \/ 1|1 of 1|第 1 \/ 1 个/);
+
+  await search.getByLabel('关闭查找', { exact: true }).click();
+  await expect(search).toHaveCount(0);
+});

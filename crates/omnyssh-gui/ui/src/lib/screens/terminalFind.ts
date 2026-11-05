@@ -12,8 +12,15 @@ export type FindResult =
 
 /** The label beside the query: empty until something is typed. The addon reports
  *  index -1 when no match is selected, which happens once the count hits the limit. */
-export function findLabel(result: FindResult): string {
+export function findLabel(result: FindResult, currentLocale: 'zh-CN' | 'en' = 'en'): string {
   if (result.kind === 'idle') return '';
+  if (currentLocale === 'zh-CN') {
+    if (result.kind === 'invalid') return '正则表达式无效';
+    const { index, count } = result;
+    if (count === 0) return '无匹配结果';
+    const total = count >= HIGHLIGHT_LIMIT ? `${HIGHLIGHT_LIMIT}+` : String(count);
+    return index < 0 ? `${total} 个匹配项` : `第 ${index + 1} / ${total} 个`;
+  }
   if (result.kind === 'invalid') return 'Invalid pattern';
   const { index, count } = result;
   if (count === 0) return 'No results';
