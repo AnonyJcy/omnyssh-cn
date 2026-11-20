@@ -885,6 +885,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::chunks_exact_to_as_chunks)]
     fn powershell_commands_are_utf16le_base64_encoded() {
         let command = powershell_encoded_command("Write-Output '\u{2713}'");
         assert!(command
