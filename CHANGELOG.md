@@ -99,6 +99,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## 1.1.4 — 2026-09-28 (Upstream)
 
+### Features
+- **Monitor Windows hosts over SSH without installing an agent.** OmnySSH now detects a remote Windows connection once per SSH session and collects CPU, memory, system-drive disk usage, uptime, Windows edition, and the top CPU processes through `Get-CimInstance`. PowerShell commands are sent non-interactively as UTF-16LE encoded commands and return JSON; unavailable counters stay unavailable rather than appearing as zero. Linux and macOS/BSD monitoring are unchanged.
+
 ### Bug Fixes
 - **macOS: the app from the `.dmg` opens instead of being "damaged".**
 - **A changed host key says so, and names the file to fix.**
