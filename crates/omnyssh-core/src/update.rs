@@ -340,15 +340,15 @@ mod tests {
     #[test]
     fn release_urls_stay_on_the_chinese_distribution() {
         let info = UpdateInfo {
-            current: "1.1.6".into(),
-            latest: "1.1.7".into(),
-            tag: "v1.1.7".into(),
+            current: "1.1.7".into(),
+            latest: "1.1.8".into(),
+            tag: "v1.1.8".into(),
             method: InstallMethod::Manual,
             can_self_update: false,
         };
         assert_eq!(
             info.release_url(),
-            "https://github.com/AnonyJcy/omnyssh-cn/releases/tag/v1.1.7"
+            "https://github.com/AnonyJcy/omnyssh-cn/releases/tag/v1.1.8"
         );
     }
 

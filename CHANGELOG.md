@@ -7,6 +7,18 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## 1.1.8 — 2026-11-21
+
+### 新增特性与功能改进
+- **支持通过 SSH 远程采集 Windows 主机监控指标（PR #138）**：
+  - 无需在远程 Windows 服务器上安装额外 Agent，OmnySSH 在建立 SSH 连接后自动探测 Windows 系统平台。
+  - 通过 UTF-16LE 编码的非交互式 PowerShell CIM 查询（`Get-CimInstance`）直接采集 CPU 使用率、物理内存使用率、系统盘使用率、系统运行时间、系统版本（Windows Edition）以及 CPU 占用最高的进程列表。
+  - 采集结果严格保持缺失项不可用状态，避免伪造为零，Linux 与 macOS/BSD 主机的监控机制保持不变。
+- **跨平台测试与构建兼容性优化**：
+  - 优化 Windows 环境下换行符（CRLF）与路径分隔符的测试断言兼容性，确保全平台测试稳定运行。
+
+---
+
 ## 1.1.7 — 2026-11-05
 
 ### 新增特性与功能改进
@@ -98,9 +110,6 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ---
 
 ## 1.1.4 — 2026-09-28 (Upstream)
-
-### Features
-- **Monitor Windows hosts over SSH without installing an agent.** OmnySSH now detects a remote Windows connection once per SSH session and collects CPU, memory, system-drive disk usage, uptime, Windows edition, and the top CPU processes through `Get-CimInstance`. PowerShell commands are sent non-interactively as UTF-16LE encoded commands and return JSON; unavailable counters stay unavailable rather than appearing as zero. Linux and macOS/BSD monitoring are unchanged.
 
 ### Bug Fixes
 - **macOS: the app from the `.dmg` opens instead of being "damaged".**
