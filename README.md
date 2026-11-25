@@ -34,7 +34,7 @@
 - **自动化 SSH 密钥免密配置**：确认后生成 Ed25519 密钥、分发公钥并验证连接；具备免密码 sudo 权限时可禁用服务器密码认证。界面明确区分密码仍开启、完整成功、已回滚及密码可能仍关闭的失败状态，并保留一键恢复密码登录功能。
 - **⌘K 全局快速命令面板**：键盘驱动，快速搜索与切换主机和活动会话。
 - **主播/隐私模式 (Streamer Mode)**：隐藏敏感主机信息，并脱敏错误消息和主机表单地址；可通过状态栏、命令面板或 `⌘⇧S` / `Ctrl+Shift+S` 切换，适合录屏与直播演示。
-- **主题与多语言随时切换**：内置浅色和深色主题，可在设置中切换 **简体中文** 与 **English**，并查看与复制已安装版本。
+- **主题、字体与多语言随时切换**：内置浅色和深色主题，默认离线内置免费可商用的 **鸿蒙黑体（HarmonyOS Sans）**，可在设置中自由切换界面字体与终端等宽字体（并支持自定义本机字体），随时切换 **简体中文** 与 **English**，并查看与复制已安装版本。
 
 ---
 
@@ -46,7 +46,7 @@
 
 | 操作系统平台 | 文件格式 | 说明 |
 |-------------|----------|------|
-| **Windows x86_64** | `OmnySSH-x86_64-setup.exe` / `OmnySSH-x86_64.zip` | 64 位 Windows 安装版 / 便携版；便携版需已安装 WebView2 Runtime |
+| **Windows x86_64** | `OmnySSH-x86_64-setup.exe` / `OmnySSH-x86_64.zip` | 64 位 Windows 简体中文安装向导 / 独立便携版；便携版需已安装 WebView2 Runtime |
 | **macOS (Apple Silicon)** | `OmnySSH-aarch64-apple-darwin.dmg` | 适用于 M1/M2/M3/M4 系列芯片 |
 | **macOS (Intel)** | `OmnySSH-x86_64-apple-darwin.dmg` | 适用于 Intel 处理器 Mac |
 | **Linux x86_64** | `OmnySSH-x86_64.AppImage` / `.deb` / `.rpm` | 通用 Linux 发行版 |
