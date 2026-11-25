@@ -2,11 +2,16 @@ import { writable } from 'svelte/store';
 
 // UI and terminal font preferences. Persisted canonically in `tauri-plugin-store`
 // with a synchronous `localStorage` mirror read by `app.html` before first paint
-// so there is no font flash on launch. Defaults to the bundled HarmonyOS Sans font
-// so Windows/Linux/macOS all render crisp CJK + Latin text offline out of the box.
+// so there is no font flash on launch.
+//
+// Defaults to `system` so the distributed binary stays lightweight (~5 MB, no
+// embedded 14 MB font files) and makes zero external network requests. When the
+// user selects `harmonyos`, we first check for a locally installed HarmonyOS Sans
+// font and otherwise load its Unicode-range WOFF2 CSS on demand from CDN.
 
-export type UiFontPreset = 'harmonyos' | 'system' | 'classic' | 'custom';
+export type UiFontPreset = 'system' | 'harmonyos' | 'classic' | 'custom';
 export type TerminalFontPreset = 'default' | 'cascadia' | 'jetbrains' | 'fira' | 'custom';
+export type HarmonyFontState = 'idle' | 'local' | 'loading' | 'loaded' | 'offline';
 
 export interface FontPrefs {
   ui: UiFontPreset;
@@ -15,7 +20,7 @@ export interface FontPrefs {
   terminalCustom: string;
 }
 
-export const UI_FONT_PRESETS: readonly UiFontPreset[] = ['harmonyos', 'system', 'classic', 'custom'];
+export const UI_FONT_PRESETS: readonly UiFontPreset[] = ['system', 'harmonyos', 'classic', 'custom'];
 export const TERMINAL_FONT_PRESETS: readonly TerminalFontPreset[] = [
   'default',
   'cascadia',
@@ -25,19 +30,28 @@ export const TERMINAL_FONT_PRESETS: readonly TerminalFontPreset[] = [
 ];
 
 export const DEFAULT_FONT_PREFS: FontPrefs = {
-  ui: 'harmonyos',
+  ui: 'system',
   uiCustom: '',
   terminal: 'default',
   terminalCustom: ''
 };
 
 export const UI_FONT_STACKS: Record<Exclude<UiFontPreset, 'custom'>, string> = {
-  harmonyos:
-    "'HarmonyOS Sans', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif",
   system:
     "system-ui, -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif",
+  harmonyos:
+    "'HarmonyOS Sans', 'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif",
   classic: "'Helvetica Neue', Helvetica, Arial, sans-serif"
 };
+
+export const HARMONYOS_FONT_STYLESHEET_URLS: readonly string[] = [
+  'https://cdn.jsdelivr.net/npm/@luzixu/harmonyos-sans@0.1.2/index.css',
+  'https://fastly.jsdelivr.net/npm/@luzixu/harmonyos-sans@0.1.2/index.css',
+  'https://unpkg.com/@luzixu/harmonyos-sans@0.1.2/index.css'
+];
+
+const HARMONY_LINK_ID = 'omnyssh-harmonyos-font';
+const HARMONY_LOAD_TIMEOUT_MS = 10_000;
 
 const TERMINAL_FONT_PREFIXES: Record<Exclude<TerminalFontPreset, 'custom'>, string> = {
   default: '',
@@ -86,7 +100,7 @@ export function formatCustomFontList(raw: string): string {
 export function resolveUiFontStack(prefs: FontPrefs): string {
   if (prefs.ui === 'custom') {
     const custom = formatCustomFontList(prefs.uiCustom);
-    return custom ? `${custom}, ${UI_FONT_STACKS.harmonyos}` : UI_FONT_STACKS.harmonyos;
+    return custom ? `${custom}, ${UI_FONT_STACKS.system}` : UI_FONT_STACKS.system;
   }
   return UI_FONT_STACKS[prefs.ui];
 }
@@ -101,7 +115,7 @@ export function resolveTerminalFontStack(prefs: FontPrefs, baseMono: string): st
 }
 
 function isUiPreset(v: unknown): v is UiFontPreset {
-  return v === 'harmonyos' || v === 'system' || v === 'classic' || v === 'custom';
+  return v === 'system' || v === 'harmonyos' || v === 'classic' || v === 'custom';
 }
 
 function isTerminalPreset(v: unknown): v is TerminalFontPreset {
@@ -122,10 +136,122 @@ export function parseFontPrefs(raw: unknown): FontPrefs {
   };
 }
 
+/** Detect whether a font family is already installed locally on the OS using
+ *  canvas text width comparison (unlike `document.fonts.check`, this reliably
+ *  inspects system-installed faces without requiring `@font-face` entries). */
+export function isLocalFontAvailable(family: string): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+    const sample = 'mmmmmmmmmmlli中文测试0123456789';
+    for (const base of ['monospace', 'sans-serif']) {
+      ctx.font = `72px ${base}`;
+      const baseWidth = ctx.measureText(sample).width;
+      ctx.font = `72px "${family}", ${base}`;
+      if (ctx.measureText(sample).width !== baseWidth) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+const harmonyStateStore = writable<HarmonyFontState>('idle');
+export const harmonyFontState = { subscribe: harmonyStateStore.subscribe };
+
+let harmonyLoadGeneration = 0;
+let harmonyLoadedUrl: string | null = null;
+
+function removeHarmonyLink(): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById(HARMONY_LINK_ID)?.remove();
+}
+
+async function loadStylesheetFromMirrors(gen: number): Promise<void> {
+  if (typeof document === 'undefined' || !document.head) {
+    harmonyStateStore.set('offline');
+    return;
+  }
+
+  for (const url of HARMONYOS_FONT_STYLESHEET_URLS) {
+    if (gen !== harmonyLoadGeneration) return;
+    removeHarmonyLink();
+    const ok = await new Promise<boolean>((resolve) => {
+      const link = document.createElement('link');
+      link.id = HARMONY_LINK_ID;
+      link.rel = 'stylesheet';
+      link.href = url;
+      link.crossOrigin = 'anonymous';
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      }, HARMONY_LOAD_TIMEOUT_MS);
+      link.addEventListener('load', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      });
+      link.addEventListener('error', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      });
+      document.head.appendChild(link);
+    });
+    if (gen !== harmonyLoadGeneration) return;
+    if (ok) {
+      harmonyLoadedUrl = url;
+      harmonyStateStore.set('loaded');
+      return;
+    }
+  }
+
+  removeHarmonyLink();
+  if (gen === harmonyLoadGeneration) {
+    harmonyStateStore.set('offline');
+  }
+}
+
+export function syncHarmonyFontLoading(preset: UiFontPreset): void {
+  harmonyLoadGeneration += 1;
+  const gen = harmonyLoadGeneration;
+  if (preset !== 'harmonyos') {
+    harmonyStateStore.set('idle');
+    return;
+  }
+  if (typeof document === 'undefined') return;
+
+  if (harmonyLoadedUrl && document.getElementById(HARMONY_LINK_ID)) {
+    harmonyStateStore.set('loaded');
+    return;
+  }
+
+  if (isLocalFontAvailable('HarmonyOS Sans') || isLocalFontAvailable('HarmonyOS Sans SC')) {
+    harmonyStateStore.set('local');
+    return;
+  }
+
+  harmonyStateStore.set('loading');
+  void loadStylesheetFromMirrors(gen);
+}
+
+export function retryHarmonyFontLoad(): void {
+  harmonyLoadedUrl = null;
+  removeHarmonyLink();
+  syncHarmonyFontLoading('harmonyos');
+}
+
 function reflectDocument(prefs: FontPrefs): void {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-font', prefs.ui);
   document.documentElement.style.setProperty('--font-sans', resolveUiFontStack(prefs));
+  syncHarmonyFontLoading(prefs.ui);
 }
 
 function readMirror(): FontPrefs {
@@ -181,6 +307,8 @@ function createFontPrefs() {
       apply(parseFontPrefs({ ...current, ...patch }), true);
     },
     reset: (): void => {
+      harmonyLoadedUrl = null;
+      removeHarmonyLink();
       apply({ ...DEFAULT_FONT_PREFS }, true);
     },
     async hydrate(): Promise<void> {

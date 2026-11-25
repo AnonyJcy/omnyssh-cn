@@ -64,9 +64,9 @@
      border lands on the green button's left edge and leaves it over the content pane.
      5rem holds the whole cluster; the other platforms have no lights to clear. */
   --rail-w: 3.5rem;
-  /* Default bundled UI font stack (HarmonyOS Sans + native CJK fallbacks), updated live
+  /* Default lightweight UI font stack (native system + CJK fallbacks), updated live
      by the font store (`stores/font.ts`) and pre-painted by `app.html` to avoid FOUC. */
-  --font-sans: 'HarmonyOS Sans', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
+  --font-sans: system-ui, -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei UI',
     'Noto Sans CJK SC', sans-serif;
 }
 :root[data-os='macos'] {

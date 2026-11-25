@@ -17,15 +17,15 @@
         // No-FOUC: apply persisted UI font preset before first paint (mirrors stores/font.ts).
         try {
           var stacks = {
-            harmonyos: "'HarmonyOS Sans', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif",
             system: "system-ui, -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif",
+            harmonyos: "'HarmonyOS Sans', 'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif",
             classic: "'Helvetica Neue', Helvetica, Arial, sans-serif"
           };
           var rawFont = localStorage.getItem('omnyssh-font');
           if (rawFont) {
             var fp = JSON.parse(rawFont);
-            var preset = fp && typeof fp.ui === 'string' ? fp.ui : 'harmonyos';
-            var stack = stacks[preset] || stacks.harmonyos;
+            var preset = fp && typeof fp.ui === 'string' && (stacks[fp.ui] || fp.ui === 'custom') ? fp.ui : 'system';
+            var stack = stacks[preset] || stacks.system;
             if (preset === 'custom' && fp && typeof fp.uiCustom === 'string') {
               var cleaned = fp.uiCustom
                 .split(',')
@@ -33,12 +33,12 @@
                 .filter(Boolean)
                 .map(function (n) { return "'" + n + "'"; })
                 .join(', ');
-              if (cleaned) stack = cleaned + ', ' + stacks.harmonyos;
+              if (cleaned) stack = cleaned + ', ' + stacks.system;
             }
             document.documentElement.setAttribute('data-font', preset);
             document.documentElement.style.setProperty('--font-sans', stack);
           } else {
-            document.documentElement.setAttribute('data-font', 'harmonyos');
+            document.documentElement.setAttribute('data-font', 'system');
           }
         } catch (e) {}
         // Reserve the overlay title-bar inset only on macOS (--titlebar-h), where the

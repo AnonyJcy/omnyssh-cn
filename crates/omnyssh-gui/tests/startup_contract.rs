@@ -158,9 +158,9 @@ fn the_rpm_declares_the_libraries_it_links() {
     }
 }
 
-/// The Windows NSIS installer ships Simplified Chinese first (with a language selector
-/// so English Windows systems can still pick Chinese or English), keeping the setup flow
-/// localized for the Chinese distribution.
+/// The Windows NSIS installer compiles only Simplified Chinese and skips the
+/// English-titled LangDLL selector popup so every Windows host opens the setup
+/// wizard directly in Simplified Chinese.
 #[test]
 fn the_windows_nsis_installer_ships_simplified_chinese() {
     let config: serde_json::Value =
@@ -172,14 +172,14 @@ fn the_windows_nsis_installer_ships_simplified_chinese() {
         .expect("bundle.windows.nsis.languages must be configured");
 
     assert_eq!(
-        languages.first().and_then(serde_json::Value::as_str),
-        Some("SimpChinese"),
-        "SimpChinese must be the primary NSIS installer language"
+        languages,
+        &vec![serde_json::json!("SimpChinese")],
+        "SimpChinese must be the sole NSIS installer language so Windows never falls back to English"
     );
     assert_eq!(
         nsis["displayLanguageSelector"],
-        serde_json::json!(true),
-        "NSIS should let users choose between Simplified Chinese and English"
+        serde_json::json!(false),
+        "NSIS must skip the English-titled LangDLL popup and open directly in Simplified Chinese"
     );
 }
 

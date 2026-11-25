@@ -455,16 +455,29 @@ test('中文终端搜索栏支持快捷键打开，显示中文查找占位符�
   await expect(search).toHaveCount(0);
 });
 
-test('中文设置页面默认使用鸿蒙黑体，并支持实时切换界面字体与终端字体', async ({ page }) => {
+test('中文设置页面默认使用轻量系统字体（零外链请求），切换到鸿蒙黑体时按需加载且各选项单行不折行', async ({ page }) => {
+  const fontCssRequests: string[] = [];
+  await page.route('https://**/@luzixu/harmonyos-sans**', async (route) => {
+    fontCssRequests.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/css; charset=utf-8',
+      body: '/* mocked harmonyos sans */'
+    });
+  });
+
   await boot(page);
-  await expect(page.locator('html')).toHaveAttribute('data-font', 'harmonyos');
+  await expect(page.locator('html')).toHaveAttribute('data-font', 'system');
+  expect(fontCssRequests).toHaveLength(0);
 
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByText('界面字体', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '鸿蒙黑体', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '系统默认', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
-  await page.getByRole('button', { name: '系统默认', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-font', 'system');
+  await page.getByRole('button', { name: '鸿蒙黑体', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-font', 'harmonyos');
+  await expect.poll(() => fontCssRequests.length).toBe(1);
+  await expect(page.getByText('已按需加载鸿蒙黑体（已缓存）。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复默认字体', exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '自定义', exact: true }).first().click();
@@ -478,8 +491,55 @@ test('中文设置页面默认使用鸿蒙黑体，并支持实时切换界面�
   await expect(page.getByRole('button', { name: 'Cascadia', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: '恢复默认字体', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-font', 'harmonyos');
-  await expect(page.getByRole('button', { name: '鸿蒙黑体', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-font', 'system');
+  await expect(page.getByRole('button', { name: '系统默认', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+  // Verify preview box has a real surface-inset background and no segmented control wraps onto 2 rows,
+  // even at the minimum window size (880x560) and in English.
+  const previewBg = await page
+    .getByText('字体预览：OmnySSH 服务器实时监控 0123456789 AaBbCc')
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(previewBg).not.toBe('rgba(0, 0, 0, 0)');
+
+  for (const size of [
+    { width: 1100, height: 720 },
+    { width: 880, height: 560 }
+  ]) {
+    await page.setViewportSize(size);
+    for (const selector of [
+      '[data-font-group="ui"]',
+      '[data-font-group="terminal"]',
+      '[data-clipboard-group="rightClick"]'
+    ]) {
+      const stats = await page.locator(selector).evaluate((el) => {
+        const rects = [...el.querySelectorAll('button')].map((b) => b.getBoundingClientRect());
+        return {
+          ys: rects.map((r) => Math.round(r.y)),
+          overflow: el.scrollWidth > el.clientWidth + 1
+        };
+      });
+      expect(stats.overflow, `${selector} overflows at ${size.width}x${size.height}`).toBe(false);
+      expect(new Set(stats.ys).size, `${selector} wrapped at ${size.width}x${size.height}`).toBe(1);
+    }
+  }
+
+  // Also check English labels at min width (e.g. "HarmonyOS Sans", "Copy or paste").
+  await page.getByRole('button', { name: 'English', exact: true }).click();
+  for (const selector of [
+    '[data-font-group="ui"]',
+    '[data-font-group="terminal"]',
+    '[data-clipboard-group="rightClick"]'
+  ]) {
+    const stats = await page.locator(selector).evaluate((el) => {
+      const rects = [...el.querySelectorAll('button')].map((b) => b.getBoundingClientRect());
+      return {
+        ys: rects.map((r) => Math.round(r.y)),
+        overflow: el.scrollWidth > el.clientWidth + 1
+      };
+    });
+    expect(stats.overflow, `${selector} (en) overflows at 880x560`).toBe(false);
+    expect(new Set(stats.ys).size, `${selector} (en) wrapped at 880x560`).toBe(1);
+  }
 });
 
 test('仪表盘在存在失败主机时按 F5 立即重载重连，全部在线时仅刷新指标且不触发页面重载', async ({ page }) => {

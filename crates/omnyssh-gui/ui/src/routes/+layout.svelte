@@ -1,5 +1,4 @@
 <script lang="ts">
-  import '@luzixu/harmonyos-sans';
   import '../app.css';
   import { onMount } from 'svelte';
   import { startEventBridge } from '$lib/ipc/subscribe';

@@ -9,6 +9,8 @@
   import { theme } from '$lib/stores/theme';
   import {
     fontPrefs,
+    harmonyFontState,
+    retryHarmonyFontLoad,
     UI_FONT_PRESETS,
     TERMINAL_FONT_PRESETS,
     DEFAULT_FONT_PREFS
@@ -89,7 +91,9 @@
   const copyAllKey = isMac ? '⇧⌘A' : 'Ctrl+Shift+A';
 
   const seg =
-    'rounded-lg px-3 py-1.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
+    'rounded-lg px-3 py-1.5 text-sm whitespace-nowrap transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
+  const segFull =
+    'flex-auto rounded-lg px-2.5 py-1.5 text-center text-sm whitespace-nowrap transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus';
   const segState = (active: boolean): string =>
     active ? 'bg-accent text-accent-fg' : 'text-muted hover:bg-surface-inset hover:text-fg';
 </script>
@@ -161,25 +165,39 @@
           </div>
         </div>
 
-        <div class="border-t border-default pt-4">
-          <div class="flex items-center justify-between gap-4">
-            <div class="min-w-0">
-              <p class="text-sm">{$t('settings.ui_font')}</p>
-              <p class="text-xs text-muted">{$t('settings.ui_font_desc')}</p>
-            </div>
-            <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
-              {#each UI_FONT_PRESETS as preset (preset)}
+        <div class="space-y-2.5 border-t border-default pt-4">
+          <div>
+            <p class="text-sm">{$t('settings.ui_font')}</p>
+            <p class="text-xs text-muted">{$t('settings.ui_font_desc')}</p>
+          </div>
+          <div data-font-group="ui" class="flex w-full items-center gap-1 rounded-xl bg-surface-inset p-1">
+            {#each UI_FONT_PRESETS as preset (preset)}
+              <button
+                type="button"
+                class="{segFull} {segState($fontPrefs.ui === preset)}"
+                aria-pressed={$fontPrefs.ui === preset}
+                onclick={() => fontPrefs.update({ ui: preset })}
+              >
+                {$t(`settings.ui_font_${preset}`)}
+              </button>
+            {/each}
+          </div>
+          {#if $fontPrefs.ui === 'harmonyos' && $harmonyFontState !== 'idle'}
+            <div class="flex items-center justify-between gap-2 text-xs text-muted">
+              <span class={$harmonyFontState === 'offline' ? 'text-status-warn' : ''}>
+                {$t(`settings.harmony_status_${$harmonyFontState}`)}
+              </span>
+              {#if $harmonyFontState === 'offline'}
                 <button
                   type="button"
-                  class="{seg} {segState($fontPrefs.ui === preset)}"
-                  aria-pressed={$fontPrefs.ui === preset}
-                  onclick={() => fontPrefs.update({ ui: preset })}
+                  class="text-xs text-fg underline underline-offset-2 transition hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                  onclick={() => retryHarmonyFontLoad()}
                 >
-                  {$t(`settings.ui_font_${preset}`)}
+                  {$t('settings.harmony_retry')}
                 </button>
-              {/each}
+              {/if}
             </div>
-          </div>
+          {/if}
           {#if $fontPrefs.ui === 'custom'}
             <input
               type="text"
@@ -187,32 +205,30 @@
               oninput={(e) => fontPrefs.update({ uiCustom: e.currentTarget.value })}
               placeholder={$t('settings.ui_font_custom_placeholder')}
               aria-label={$t('settings.ui_font')}
-              class="mt-3 w-full rounded-xl border border-default bg-surface-inset px-3 py-2 text-sm text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              class="w-full rounded-xl border border-default bg-surface-inset px-3 py-2 text-sm text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             />
           {/if}
-          <p class="mt-2.5 rounded-lg bg-surface-inset/70 px-3 py-2 text-xs text-muted">
+          <p class="rounded-lg border border-default bg-surface-inset px-3 py-2 text-xs text-fg">
             {$t('settings.ui_font_preview')}
           </p>
         </div>
 
-        <div class="border-t border-default pt-4">
-          <div class="flex items-center justify-between gap-4">
-            <div class="min-w-0">
-              <p class="text-sm">{$t('settings.terminal_font')}</p>
-              <p class="text-xs text-muted">{$t('settings.terminal_font_desc')}</p>
-            </div>
-            <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
-              {#each TERMINAL_FONT_PRESETS as preset (preset)}
-                <button
-                  type="button"
-                  class="{seg} {segState($fontPrefs.terminal === preset)}"
-                  aria-pressed={$fontPrefs.terminal === preset}
-                  onclick={() => fontPrefs.update({ terminal: preset })}
-                >
-                  {$t(`settings.terminal_font_${preset}`)}
-                </button>
-              {/each}
-            </div>
+        <div class="space-y-2.5 border-t border-default pt-4">
+          <div>
+            <p class="text-sm">{$t('settings.terminal_font')}</p>
+            <p class="text-xs text-muted">{$t('settings.terminal_font_desc')}</p>
+          </div>
+          <div data-font-group="terminal" class="flex w-full items-center gap-1 rounded-xl bg-surface-inset p-1">
+            {#each TERMINAL_FONT_PRESETS as preset (preset)}
+              <button
+                type="button"
+                class="{segFull} {segState($fontPrefs.terminal === preset)}"
+                aria-pressed={$fontPrefs.terminal === preset}
+                onclick={() => fontPrefs.update({ terminal: preset })}
+              >
+                {$t(`settings.terminal_font_${preset}`)}
+              </button>
+            {/each}
           </div>
           {#if $fontPrefs.terminal === 'custom'}
             <input
@@ -221,7 +237,7 @@
               oninput={(e) => fontPrefs.update({ terminalCustom: e.currentTarget.value })}
               placeholder={$t('settings.terminal_font_custom_placeholder')}
               aria-label={$t('settings.terminal_font')}
-              class="mt-3 w-full rounded-xl border border-default bg-surface-inset px-3 py-2 font-mono text-sm text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              class="w-full rounded-xl border border-default bg-surface-inset px-3 py-2 font-mono text-sm text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             />
           {/if}
         </div>
@@ -278,16 +294,16 @@
           () => clipboardPrefs.update({ copyOnSelect: !$clipboardPrefs.copyOnSelect })
         )}
 
-        <div class="flex items-center justify-between gap-4 border-t border-default pt-4">
-          <div class="min-w-0">
+        <div class="space-y-2.5 border-t border-default pt-4">
+          <div>
             <p class="text-sm">{$t('settings.right_click')}</p>
             <p class="text-xs text-muted">{$t(`settings.right_click_${$clipboardPrefs.rightClick}_desc`)}</p>
           </div>
-          <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
+          <div data-clipboard-group="rightClick" class="flex w-full items-center gap-1 rounded-xl bg-surface-inset p-1">
             {#each RIGHT_CLICK_OPTIONS as option (option)}
               <button
                 type="button"
-                class="{seg} {segState($clipboardPrefs.rightClick === option)}"
+                class="{segFull} {segState($clipboardPrefs.rightClick === option)}"
                 aria-pressed={$clipboardPrefs.rightClick === option}
                 onclick={() => clipboardPrefs.update({ rightClick: option })}
               >
@@ -339,7 +355,7 @@
           <p class="text-sm">{$t('settings.metrics_refresh')}</p>
           <p class="text-xs text-muted">{$t('settings.metrics_refresh_desc')}</p>
         </div>
-        <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
+        <div class="flex shrink-0 gap-1 rounded-xl bg-surface-inset p-1">
           {#each REFRESH_OPTIONS as secs (secs)}
             <button
               type="button"
