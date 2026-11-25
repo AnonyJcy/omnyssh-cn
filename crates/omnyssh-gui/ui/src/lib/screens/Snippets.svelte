@@ -3,13 +3,14 @@
   // add/edit/delete (round-tripping through `snippets.toml`), and run them on one or
   // more hosts with per-host results. CRUD orchestration refreshes the store from
   // disk after every mutation so it never drifts. Colour is reserved for state.
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import type { SnippetDto } from '$lib/bindings';
   import { Surface, Chip, Icon, Button } from '$lib/theme';
   import { listSnippets, saveSnippet, deleteSnippet, executeSnippet } from '$lib/ipc/commands';
   import { snippets, beginRun, failPendingRun } from '$lib/stores/snippets';
   import { lastError } from '$lib/stores/notifications';
+  import { onViewRefresh } from '$lib/stores/ui';
   import { filterSnippets, emptyForm, formFromSnippet } from './snippetForm';
   import SnippetEditor from './SnippetEditor.svelte';
   import SnippetRunner from './SnippetRunner.svelte';
@@ -38,6 +39,7 @@
   }
 
   onMount(refresh);
+  onDestroy(onViewRefresh(() => void refresh()));
 
   // Persist add/edit, then re-read from disk. Throws propagate to the editor so a
   // failed save surfaces inline and keeps the form open.

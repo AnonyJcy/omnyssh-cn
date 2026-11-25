@@ -139,3 +139,47 @@ export function isRefreshHotkey(e: KeyboardEvent): boolean {
 export function isGroupHotkey(e: KeyboardEvent): boolean {
   return isDashboardKey(e, 'g');
 }
+
+export interface RefreshChordMatch {
+  /** Whether the user pressed a browser-style refresh shortcut (F5, Ctrl+R, ⌘R). */
+  matched: boolean;
+  /** True for Shift+F5 / Ctrl+F5 / Ctrl+Shift+R / ⌘⇧R (forces full reload). */
+  hard: boolean;
+  /** True when the chord is bare Ctrl+R (shell reverse-i-search inside a terminal). */
+  isCtrlR: boolean;
+}
+
+/** Browser-style refresh chords (`F5`, `Ctrl+R`, `⌘R`, and their Shift/hard variants).
+ *  On Windows WebView2 these otherwise reload the entire HTML document and discard live
+ *  tabs; intercepting them lets each view perform a proper in-app refresh instead. */
+export function matchRefreshChord(e: KeyboardEvent): RefreshChordMatch {
+  const none: RefreshChordMatch = { matched: false, hard: false, isCtrlR: false };
+  if (e.repeat || e.altKey || e.isComposing) return none;
+  if (e.key === 'F5' && !e.metaKey) {
+    return { matched: true, hard: e.ctrlKey || e.shiftKey, isCtrlR: false };
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key?.toLowerCase() === 'r' || (e.code === 'KeyR' && !/^[a-z]$/i.test(e.key ?? '')))) {
+    return {
+      matched: true,
+      hard: e.shiftKey,
+      isCtrlR: e.ctrlKey && !e.metaKey && !e.shiftKey
+    };
+  }
+  return none;
+}
+
+type ViewRefreshHandler = (opts: { hard: boolean }) => void;
+const refreshListeners = new Set<ViewRefreshHandler>();
+
+/** Subscribe the currently mounted view to app-level refresh chords (`F5` / `Ctrl+R` / `⌘R`). */
+export function onViewRefresh(handler: ViewRefreshHandler): () => void {
+  refreshListeners.add(handler);
+  return () => refreshListeners.delete(handler);
+}
+
+/** Notify subscribed views that the user triggered an in-app refresh chord. */
+export function triggerViewRefresh(hard = false): void {
+  for (const handler of [...refreshListeners]) {
+    handler({ hard });
+  }
+}

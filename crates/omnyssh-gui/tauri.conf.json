@@ -43,6 +43,14 @@
     "macOS": {
       "signingIdentity": "-"
     },
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    },
     "category": "Utility",
     "shortDescription": "Native GUI for the OmnySSH engine",
     "longDescription": "OmnySSH Desktop — SSH dashboard, terminal, and SFTP file manager.",

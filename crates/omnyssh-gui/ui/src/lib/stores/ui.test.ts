@@ -7,7 +7,10 @@ import {
   isGroupHotkey,
   isPaletteChord,
   isRefreshHotkey,
-  isStreamerChord
+  isStreamerChord,
+  matchRefreshChord,
+  onViewRefresh,
+  triggerViewRefresh
 } from './ui';
 import { dialogs } from './dialogs';
 import { palette } from './palette';
@@ -268,5 +271,39 @@ describe('dashboard hotkeys under a modal', () => {
       palette.close();
     }
     expect(isGroupHotkey(new KeyboardEvent('keydown', { key: 'g' }))).toBe(true);
+  });
+});
+
+describe('browser refresh chords (F5 / Ctrl+R / ⌘R)', () => {
+  const match = (init: KeyboardEventInit) => matchRefreshChord(new KeyboardEvent('keydown', init));
+
+  it('matches F5 and distinguishes hard reload modifiers', () => {
+    expect(match({ key: 'F5' })).toEqual({ matched: true, hard: false, isCtrlR: false });
+    expect(match({ key: 'F5', shiftKey: true })).toEqual({ matched: true, hard: true, isCtrlR: false });
+    expect(match({ key: 'F5', ctrlKey: true })).toEqual({ matched: true, hard: true, isCtrlR: false });
+  });
+
+  it('matches Ctrl+R / Ctrl+Shift+R / ⌘R and flags bare Ctrl+R for terminals', () => {
+    expect(match({ key: 'r', ctrlKey: true })).toEqual({ matched: true, hard: false, isCtrlR: true });
+    expect(match({ key: 'R', ctrlKey: true, shiftKey: true })).toEqual({
+      matched: true,
+      hard: true,
+      isCtrlR: false
+    });
+    expect(match({ key: 'r', metaKey: true })).toEqual({ matched: true, hard: false, isCtrlR: false });
+    expect(match({ key: 'r', altKey: true, ctrlKey: true }).matched).toBe(false);
+    expect(match({ key: 'r', ctrlKey: true, repeat: true }).matched).toBe(false);
+  });
+
+  it('notifies subscribed view refresh handlers and unsubscribes cleanly', () => {
+    const fn = vi.fn();
+    const off = onViewRefresh(fn);
+    triggerViewRefresh(false);
+    triggerViewRefresh(true);
+    off();
+    triggerViewRefresh(false);
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenNthCalledWith(1, { hard: false });
+    expect(fn).toHaveBeenNthCalledWith(2, { hard: true });
   });
 });

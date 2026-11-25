@@ -69,7 +69,7 @@ impl App {
 
             AppAction::RefreshMetrics => {
                 if let Some(mgr) = &self.poll_manager {
-                    mgr.refresh_all();
+                    mgr.force_refresh_all();
                 }
                 self.view.status_message = Some("Refreshing metrics…".to_string());
             }

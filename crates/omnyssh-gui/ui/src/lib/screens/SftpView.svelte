@@ -31,6 +31,7 @@
   import { lastError } from '$lib/stores/notifications';
   import { streamerMode, displayHostTitle, maskText } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
+  import { onViewRefresh } from '$lib/stores/ui';
   import { dropPoint, isMac, isWindows } from '$lib/platform';
   import {
     sftpOpen,
@@ -107,6 +108,22 @@
   // Only the latest local listing lands: a network drive left for another can take
   // a long time to fail, and must not then replace the pane the user is on.
   let localSeq = 0;
+  let localSpin = $state(false);
+  let remoteSpin = $state(false);
+  let localSpinTimer: ReturnType<typeof setTimeout> | undefined;
+  let remoteSpinTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function spinLocal(): void {
+    localSpin = true;
+    clearTimeout(localSpinTimer);
+    localSpinTimer = setTimeout(() => (localSpin = false), 350);
+  }
+
+  function spinRemote(): void {
+    remoteSpin = true;
+    clearTimeout(remoteSpinTimer);
+    remoteSpinTimer = setTimeout(() => (remoteSpin = false), 350);
+  }
 
   async function refreshLocal(path: string): Promise<void> {
     const id = backendId;
@@ -134,6 +151,20 @@
     if (id == null) return;
     sftp.beginLoading(id, 'remote');
     void sftpList(id, path).catch((err) => sftp.paneError(id, 'remote', errMsg(err)));
+  }
+
+  function triggerLocalRefresh(): void {
+    if (!view) return;
+    spinLocal();
+    // A drive plugged in since shows up too.
+    void loadRoots();
+    void refreshLocal(view.local.path);
+  }
+
+  function triggerRemoteRefresh(): void {
+    if (!view) return;
+    spinRemote();
+    refreshRemote(view.remote.path);
   }
 
   type ShortcutLocation = {
@@ -273,11 +304,21 @@
 
   onDestroy(() => {
     destroyed = true;
+    clearTimeout(localSpinTimer);
+    clearTimeout(remoteSpinTimer);
     if (backendId != null) {
       void sftpClose(backendId).catch(() => {});
       sftp.remove(backendId);
     }
   });
+
+  onDestroy(
+    onViewRefresh(() => {
+      if (!active || !view) return;
+      triggerLocalRefresh();
+      triggerRemoteRefresh();
+    })
+  );
 
   // Mirror the store connection status to the sidebar dot (the sessions store is the
   // sidebar's source of truth); only on change, to avoid churning the sessions list.
@@ -755,13 +796,11 @@
             class={toolBtn}
             title={$t('sftp.refresh')}
             aria-label={$t('sftp.refresh_local')}
-            onclick={() => {
-              // A drive plugged in since shows up too.
-              void loadRoots();
-              void refreshLocal(view.local.path);
-            }}
+            onclick={triggerLocalRefresh}
           >
-            <Icon name="refresh" size={13} />
+            <span class="inline-flex {localSpin || view.local.loading ? 'animate-spin' : ''}">
+              <Icon name="refresh" size={13} />
+            </span>
           </button>
         {/snippet}
       </SftpPane>
@@ -818,9 +857,11 @@
             class={toolBtn}
             title={$t('sftp.refresh')}
             aria-label={$t('sftp.refresh_remote')}
-            onclick={() => refreshRemote(view.remote.path)}
+            onclick={triggerRemoteRefresh}
           >
-            <Icon name="refresh" size={13} />
+            <span class="inline-flex {remoteSpin || view.remote.loading ? 'animate-spin' : ''}">
+              <Icon name="refresh" size={13} />
+            </span>
           </button>
         {/snippet}
       </SftpPane>

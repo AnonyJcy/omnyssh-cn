@@ -14,8 +14,16 @@
   import UpdateBanner from './UpdateBanner.svelte';
   import { support } from '$lib/stores/support';
   import { get } from 'svelte/store';
-  import { sidebarCollapsed, isCollapseChord, isCloseTabChord, isStreamerChord } from '$lib/stores/ui';
+  import {
+    sidebarCollapsed,
+    isCollapseChord,
+    isCloseTabChord,
+    isStreamerChord,
+    matchRefreshChord,
+    triggerViewRefresh
+  } from '$lib/stores/ui';
   import { activeEntity } from '$lib/stores/activeEntity';
+  import { sessions } from '$lib/stores/sessions';
   import { palette } from '$lib/stores/palette';
   import { dialogs } from '$lib/stores/dialogs';
   import { closeSession } from '$lib/stores/navigation';
@@ -38,6 +46,21 @@
     } else if (isStreamerChord(e)) {
       e.preventDefault();
       streamerMode.toggle();
+    } else {
+      const chord = matchRefreshChord(e);
+      if (chord.matched) {
+        const active = get(activeEntity);
+        const activeSession =
+          active.kind === 'session' ? get(sessions).find((s) => s.id === active.id) : undefined;
+        const inTerminal = activeSession?.kind === 'terminal';
+        // Never steal bare Ctrl+R from a live terminal (bash/zsh reverse-i-search).
+        if (inTerminal && chord.isCtrlR) return;
+        // Stop Windows WebView2 / browsers from reloading the whole page and dropping tabs.
+        e.preventDefault();
+        if (!inTerminal && get(dialogs).length === 0 && !get(palette).open) {
+          triggerViewRefresh(chord.hard);
+        }
+      }
     }
   }
 </script>

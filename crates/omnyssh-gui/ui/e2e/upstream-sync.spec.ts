@@ -454,3 +454,49 @@ test('中文终端搜索栏支持快捷键打开，显示中文查找占位符�
   await search.getByLabel('关闭查找', { exact: true }).click();
   await expect(search).toHaveCount(0);
 });
+
+test('中文设置页面默认使用鸿蒙黑体，并支持实时切换界面字体与终端字体', async ({ page }) => {
+  await boot(page);
+  await expect(page.locator('html')).toHaveAttribute('data-font', 'harmonyos');
+
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByText('界面字体', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '鸿蒙黑体', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: '系统默认', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-font', 'system');
+  await expect(page.getByRole('button', { name: '恢复默认字体', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '自定义', exact: true }).first().click();
+  const uiCustom = page.getByPlaceholder('输入本机已安装的字体名称，例如 MiSans、霞鹜文楷');
+  await uiCustom.fill('MiSans');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--font-sans')))
+    .toContain("'MiSans'");
+
+  await page.getByRole('button', { name: 'Cascadia', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cascadia', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: '恢复默认字体', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-font', 'harmonyos');
+  await expect(page.getByRole('button', { name: '鸿蒙黑体', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('仪表盘在存在失败主机时按 F5 立即重载重连，全部在线时仅刷新指标且不触发页面重载', async ({ page }) => {
+  await boot(page);
+  const initialReloads = (await calls(page, 'reload_hosts')).length;
+
+  // All hosts connected -> F5 refreshes metrics without reconnecting pollers.
+  for (const hostName of ['web-1', 'pw-host', 'db']) {
+    await fire(page, 'host-status-changed', { hostName, status: { kind: 'connected' } });
+  }
+  await page.keyboard.press('F5');
+  await expect.poll(() => calls(page, 'refresh_metrics')).toHaveLength(1);
+  expect((await calls(page, 'reload_hosts')).length).toBe(initialReloads);
+
+  // Wait for minimum spin window to clear, then mark one host failed -> Ctrl+R triggers reload_hosts.
+  await page.waitForTimeout(550);
+  await fire(page, 'host-status-changed', { hostName: 'web-1', status: { kind: 'failed', reason: 'timeout' } });
+  await page.keyboard.press('Control+r');
+  await expect.poll(() => (calls(page, 'reload_hosts').then((c) => c.length))).toBe(initialReloads + 1);
+});

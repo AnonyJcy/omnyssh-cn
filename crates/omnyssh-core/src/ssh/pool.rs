@@ -180,13 +180,23 @@ impl BackoffState {
 // PollManager — owned by App, drives all HostPoller tasks
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefreshKind {
+    /// Automatic timer-driven refresh: polls connected hosts immediately,
+    /// but never shortens a failing host's reconnect backoff.
+    Scheduled,
+    /// Explicit user-triggered refresh: wakes both connected hosts and
+    /// failing hosts waiting in reconnect backoff.
+    Manual,
+}
+
 /// Manages background metric polling for all hosts.
 ///
 /// Drop this struct to abort all poller tasks.
 pub struct PollManager {
     task_handles: Vec<JoinHandle<()>>,
     /// Per-host channel to send an immediate-refresh signal.
-    refresh_txs: HashMap<String, mpsc::Sender<()>>,
+    refresh_txs: HashMap<String, mpsc::Sender<RefreshKind>>,
 }
 
 impl PollManager {
@@ -196,7 +206,7 @@ impl PollManager {
         let mut refresh_txs = HashMap::with_capacity(hosts.len());
 
         for host in hosts {
-            let (refresh_tx, refresh_rx) = mpsc::channel::<()>(4);
+            let (refresh_tx, refresh_rx) = mpsc::channel::<RefreshKind>(4);
             refresh_txs.insert(host.name.clone(), refresh_tx);
 
             let event_tx = tx.clone();
@@ -211,10 +221,21 @@ impl PollManager {
         }
     }
 
-    /// Trigger an immediate poll for all hosts (called on `r` key press).
+    /// Trigger an immediate scheduled poll for connected hosts without
+    /// shortening reconnect backoff for failing hosts.
     pub fn refresh_all(&self) {
+        self.send_refresh(RefreshKind::Scheduled);
+    }
+
+    /// Trigger an explicit manual refresh for all hosts, waking failing hosts
+    /// out of reconnect backoff so they retry immediately.
+    pub fn force_refresh_all(&self) {
+        self.send_refresh(RefreshKind::Manual);
+    }
+
+    fn send_refresh(&self, kind: RefreshKind) {
         for (name, tx) in &self.refresh_txs {
-            if tx.try_send(()).is_err() {
+            if tx.try_send(kind).is_err() {
                 tracing::debug!(host = %name, "refresh signal dropped — channel full or closed");
             }
         }
@@ -238,7 +259,7 @@ async fn run_host_poller(
     host: Host,
     tx: mpsc::Sender<CoreEvent>,
     poll_interval: Duration,
-    refresh_rx: mpsc::Receiver<()>,
+    refresh_rx: mpsc::Receiver<RefreshKind>,
 ) {
     match host.monitoring {
         MonitorMode::Ssh => run_ssh_poller(host, tx, poll_interval, refresh_rx).await,
@@ -256,7 +277,7 @@ async fn run_tcp_poller(
     host: Host,
     tx: mpsc::Sender<CoreEvent>,
     poll_interval: Duration,
-    mut refresh_rx: mpsc::Receiver<()>,
+    mut refresh_rx: mpsc::Receiver<RefreshKind>,
 ) {
     // A bare TCP dial cannot traverse a bastion, and probing the target address
     // direct would silently report on whatever else answers it.
@@ -318,9 +339,12 @@ async fn run_tcp_poller(
             wait_or_refresh(poll_interval, &mut refresh_rx).await;
         } else {
             // Same restraint as the SSH poller: a device that is down should not
-            // be re-dialled on every refresh tick.
+            // be re-dialled on every scheduled tick, while an explicit manual
+            // refresh wakes it immediately.
             let delay = backoff.next_delay().max(poll_interval);
-            wait_backoff(delay, &mut refresh_rx).await;
+            if wait_backoff(delay, &mut refresh_rx).await {
+                backoff.reset();
+            }
         }
     }
 }
@@ -329,7 +353,7 @@ async fn run_ssh_poller(
     host: Host,
     tx: mpsc::Sender<CoreEvent>,
     poll_interval: Duration,
-    mut refresh_rx: mpsc::Receiver<()>,
+    mut refresh_rx: mpsc::Receiver<RefreshKind>,
 ) {
     let mut backoff = BackoffState::new();
     let mut session: Option<SshSession> = None;
@@ -356,8 +380,10 @@ async fn run_ssh_poller(
                     send_status(&tx, &host.name, ConnectionStatus::Failed(reason)).await;
                     let delay = backoff.next_delay();
                     let Some(login) = waiting_login(&e).map(str::to_owned) else {
-                        // Wait with backoff, allowing early refresh.
-                        wait_backoff(delay, &mut refresh_rx).await;
+                        // Wait with backoff; an explicit manual refresh retries immediately.
+                        if wait_backoff(delay, &mut refresh_rx).await {
+                            backoff.reset();
+                        }
                         continue;
                     };
                     // A poller never asks for a password, only for a passphrase.
@@ -368,7 +394,11 @@ async fn run_ssh_poller(
                         identity::ask_passphrase_once(&tx, &host.name, path).await;
                     }
                     tokio::select! {
-                        () = wait_backoff(delay, &mut refresh_rx) => {}
+                        manual = wait_backoff(delay, &mut refresh_rx) => {
+                            if manual {
+                                backoff.reset();
+                            }
+                        }
                         () = password::remembered(&login) => {}
                         () = async {
                             match &locked {
@@ -467,7 +497,9 @@ async fn run_ssh_poller(
                 remote_os = None;
                 send_status(&tx, &host.name, ConnectionStatus::Failed(e.to_string())).await;
                 let delay = backoff.next_delay();
-                wait_backoff(delay, &mut refresh_rx).await;
+                if wait_backoff(delay, &mut refresh_rx).await {
+                    backoff.reset();
+                }
                 continue;
             }
         }
@@ -477,8 +509,8 @@ async fn run_ssh_poller(
     }
 }
 
-/// Wait for `delay`, but return early if a refresh signal is received.
-async fn wait_or_refresh(delay: Duration, refresh_rx: &mut mpsc::Receiver<()>) {
+/// Wait for `delay`, but return early if any refresh signal is received.
+async fn wait_or_refresh(delay: Duration, refresh_rx: &mut mpsc::Receiver<RefreshKind>) {
     let sleep = tokio::time::sleep(delay);
     tokio::pin!(sleep);
     tokio::select! {
@@ -493,24 +525,27 @@ async fn wait_or_refresh(delay: Duration, refresh_rx: &mut mpsc::Receiver<()>) {
     }
 }
 
-/// Sleep the whole `delay`, discarding refresh signals.
+/// Sleep the whole `delay`, discarding scheduled refresh signals while waking
+/// immediately on an explicit manual refresh (`RefreshKind::Manual`).
 ///
-/// A reconnect must never dial faster than the backoff schedule: the GUI drives
-/// `refresh_all` on its own timer, which is indistinguishable from a keypress
-/// here and would otherwise retry a failing host every few seconds.
-async fn wait_backoff(delay: Duration, refresh_rx: &mut mpsc::Receiver<()>) {
+/// Returns `true` when woken by a manual refresh, `false` when the backoff elapsed.
+async fn wait_backoff(delay: Duration, refresh_rx: &mut mpsc::Receiver<RefreshKind>) -> bool {
     let sleep = tokio::time::sleep(delay);
     tokio::pin!(sleep);
     loop {
         tokio::select! {
-            () = &mut sleep => return,
+            () = &mut sleep => return false,
             signal = refresh_rx.recv() => {
-                // `None` means every sender is gone and `recv` will return it
-                // immediately from now on — stop selecting on it, or the task
-                // spins without ever yielding.
-                if signal.is_none() {
-                    sleep.await;
-                    return;
+                match signal {
+                    Some(RefreshKind::Manual) => return true,
+                    Some(RefreshKind::Scheduled) => {}
+                    // `None` means every sender is gone and `recv` will return it
+                    // immediately from now on — stop selecting on it, or the task
+                    // spins without ever yielding.
+                    None => {
+                        sleep.await;
+                        return false;
+                    }
                 }
             }
         }
@@ -975,31 +1010,48 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn wait_backoff_ignores_refresh_signals() {
-        let (tx, mut rx) = mpsc::channel::<()>(4);
+        let (tx, mut rx) = mpsc::channel::<RefreshKind>(4);
         for _ in 0..4 {
-            tx.try_send(()).expect("channel has room");
+            tx.try_send(RefreshKind::Scheduled)
+                .expect("channel has room");
         }
 
         let start = tokio::time::Instant::now();
-        wait_backoff(Duration::from_secs(300), &mut rx).await;
+        let manual = wait_backoff(Duration::from_secs(300), &mut rx).await;
 
+        assert!(!manual);
         assert_eq!(start.elapsed(), Duration::from_secs(300));
     }
 
     #[tokio::test(start_paused = true)]
+    async fn wait_backoff_wakes_immediately_on_manual_refresh() {
+        let (tx, mut rx) = mpsc::channel::<RefreshKind>(4);
+        tx.try_send(RefreshKind::Scheduled)
+            .expect("channel has room");
+        tx.try_send(RefreshKind::Manual).expect("channel has room");
+
+        let start = tokio::time::Instant::now();
+        let manual = wait_backoff(Duration::from_secs(300), &mut rx).await;
+
+        assert!(manual);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn wait_backoff_serves_out_its_delay_once_every_sender_is_gone() {
-        let (tx, mut rx) = mpsc::channel::<()>(4);
+        let (tx, mut rx) = mpsc::channel::<RefreshKind>(4);
         drop(tx);
 
         let start = tokio::time::Instant::now();
-        wait_backoff(Duration::from_secs(300), &mut rx).await;
+        let manual = wait_backoff(Duration::from_secs(300), &mut rx).await;
 
+        assert!(!manual);
         assert_eq!(start.elapsed(), Duration::from_secs(300));
     }
 
     #[tokio::test(start_paused = true)]
     async fn wait_or_refresh_serves_out_its_delay_once_every_sender_is_gone() {
-        let (tx, mut rx) = mpsc::channel::<()>(4);
+        let (tx, mut rx) = mpsc::channel::<RefreshKind>(4);
         drop(tx);
 
         let start = tokio::time::Instant::now();
@@ -1010,8 +1062,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn wait_or_refresh_still_returns_early() {
-        let (tx, mut rx) = mpsc::channel::<()>(4);
-        tx.try_send(()).expect("channel has room");
+        let (tx, mut rx) = mpsc::channel::<RefreshKind>(4);
+        tx.try_send(RefreshKind::Scheduled)
+            .expect("channel has room");
 
         let start = tokio::time::Instant::now();
         wait_or_refresh(Duration::from_secs(300), &mut rx).await;

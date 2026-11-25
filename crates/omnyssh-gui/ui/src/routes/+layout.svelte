@@ -1,9 +1,11 @@
 <script lang="ts">
+  import '@luzixu/harmonyos-sans';
   import '../app.css';
   import { onMount } from 'svelte';
   import { startEventBridge } from '$lib/ipc/subscribe';
   import { reloadHosts, refreshMetrics, setTrayBehavior } from '$lib/ipc/commands';
   import { theme } from '$lib/stores/theme';
+  import { fontPrefs } from '$lib/stores/font';
   import { sidebarCollapsed } from '$lib/stores/ui';
   import { streamerMode } from '$lib/stores/streamer';
   import { refreshInterval, driveMetricsRefresh } from '$lib/stores/settings';
@@ -23,6 +25,7 @@
     // Reconcile the persisted prefs with their canonical tauri-plugin-store values;
     // the synchronous localStorage mirrors already seeded the first paint (§5.1, §2).
     void theme.hydrate();
+    void fontPrefs.hydrate();
     void sidebarCollapsed.hydrate();
     void streamerMode.hydrate();
     void refreshInterval.hydrate();

@@ -7,6 +7,12 @@
   import type { UpdateConfigDto } from '$lib/bindings';
   import { Surface, Icon } from '$lib/theme';
   import { theme } from '$lib/stores/theme';
+  import {
+    fontPrefs,
+    UI_FONT_PRESETS,
+    TERMINAL_FONT_PRESETS,
+    DEFAULT_FONT_PREFS
+  } from '$lib/stores/font';
   import { streamerMode } from '$lib/stores/streamer';
   import { refreshInterval, REFRESH_OPTIONS } from '$lib/stores/settings';
   import { traySupport, trayBehavior } from '$lib/stores/tray';
@@ -117,29 +123,107 @@
 
     <!-- Appearance -->
     <Surface class="p-5">
-      <h2 class="mb-3 text-sm font-semibold">{$t('settings.appearance')}</h2>
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <p class="text-sm">{$t('settings.theme')}</p>
-          <p class="text-xs text-muted">{$t('settings.theme_desc')}</p>
+      <div class="mb-3 flex items-center justify-between gap-4">
+        <h2 class="text-sm font-semibold">{$t('settings.appearance')}</h2>
+        {#if $fontPrefs.ui !== DEFAULT_FONT_PREFS.ui || $fontPrefs.terminal !== DEFAULT_FONT_PREFS.terminal || $fontPrefs.uiCustom !== '' || $fontPrefs.terminalCustom !== ''}
+          <button
+            type="button"
+            class="text-xs text-muted transition hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            onclick={() => fontPrefs.reset()}
+          >
+            {$t('settings.font_reset')}
+          </button>
+        {/if}
+      </div>
+      <div class="space-y-4">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm">{$t('settings.theme')}</p>
+            <p class="text-xs text-muted">{$t('settings.theme_desc')}</p>
+          </div>
+          <div class="flex gap-1 rounded-xl bg-surface-inset p-1">
+            <button
+              type="button"
+              class="{seg} {segState($theme === 'light')}"
+              aria-pressed={$theme === 'light'}
+              onclick={() => theme.set('light')}
+            >
+              <span class="flex items-center gap-1.5"><Icon name="sun" size={14} /> {$t('settings.theme_light')}</span>
+            </button>
+            <button
+              type="button"
+              class="{seg} {segState($theme === 'dark')}"
+              aria-pressed={$theme === 'dark'}
+              onclick={() => theme.set('dark')}
+            >
+              <span class="flex items-center gap-1.5"><Icon name="moon" size={14} /> {$t('settings.theme_dark')}</span>
+            </button>
+          </div>
         </div>
-        <div class="flex gap-1 rounded-xl bg-surface-inset p-1">
-          <button
-            type="button"
-            class="{seg} {segState($theme === 'light')}"
-            aria-pressed={$theme === 'light'}
-            onclick={() => theme.set('light')}
-          >
-            <span class="flex items-center gap-1.5"><Icon name="sun" size={14} /> {$t('settings.theme_light')}</span>
-          </button>
-          <button
-            type="button"
-            class="{seg} {segState($theme === 'dark')}"
-            aria-pressed={$theme === 'dark'}
-            onclick={() => theme.set('dark')}
-          >
-            <span class="flex items-center gap-1.5"><Icon name="moon" size={14} /> {$t('settings.theme_dark')}</span>
-          </button>
+
+        <div class="border-t border-default pt-4">
+          <div class="flex items-center justify-between gap-4">
+            <div class="min-w-0">
+              <p class="text-sm">{$t('settings.ui_font')}</p>
+              <p class="text-xs text-muted">{$t('settings.ui_font_desc')}</p>
+            </div>
+            <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
+              {#each UI_FONT_PRESETS as preset (preset)}
+                <button
+                  type="button"
+                  class="{seg} {segState($fontPrefs.ui === preset)}"
+                  aria-pressed={$fontPrefs.ui === preset}
+                  onclick={() => fontPrefs.update({ ui: preset })}
+                >
+                  {$t(`settings.ui_font_${preset}`)}
+                </button>
+              {/each}
+            </div>
+          </div>
+          {#if $fontPrefs.ui === 'custom'}
+            <input
+              type="text"
+              value={$fontPrefs.uiCustom}
+              oninput={(e) => fontPrefs.update({ uiCustom: e.currentTarget.value })}
+              placeholder={$t('settings.ui_font_custom_placeholder')}
+              aria-label={$t('settings.ui_font')}
+              class="mt-3 w-full rounded-xl border border-default bg-surface-inset px-3 py-2 text-sm text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            />
+          {/if}
+          <p class="mt-2.5 rounded-lg bg-surface-inset/70 px-3 py-2 text-xs text-muted">
+            {$t('settings.ui_font_preview')}
+          </p>
+        </div>
+
+        <div class="border-t border-default pt-4">
+          <div class="flex items-center justify-between gap-4">
+            <div class="min-w-0">
+              <p class="text-sm">{$t('settings.terminal_font')}</p>
+              <p class="text-xs text-muted">{$t('settings.terminal_font_desc')}</p>
+            </div>
+            <div class="flex flex-wrap justify-end gap-1 rounded-xl bg-surface-inset p-1">
+              {#each TERMINAL_FONT_PRESETS as preset (preset)}
+                <button
+                  type="button"
+                  class="{seg} {segState($fontPrefs.terminal === preset)}"
+                  aria-pressed={$fontPrefs.terminal === preset}
+                  onclick={() => fontPrefs.update({ terminal: preset })}
+                >
+                  {$t(`settings.terminal_font_${preset}`)}
+                </button>
+              {/each}
+            </div>
+          </div>
+          {#if $fontPrefs.terminal === 'custom'}
+            <input
+              type="text"
+              value={$fontPrefs.terminalCustom}
+              oninput={(e) => fontPrefs.update({ terminalCustom: e.currentTarget.value })}
+              placeholder={$t('settings.terminal_font_custom_placeholder')}
+              aria-label={$t('settings.terminal_font')}
+              class="mt-3 w-full rounded-xl border border-default bg-surface-inset px-3 py-2 font-mono text-sm text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            />
+          {/if}
         </div>
       </div>
     </Surface>

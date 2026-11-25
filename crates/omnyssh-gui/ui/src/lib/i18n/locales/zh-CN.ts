@@ -42,6 +42,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'dashboard.close_search': '关闭搜索',
   'dashboard.search_hosts': '搜索主机',
   'dashboard.refresh_metrics': '刷新指标 (R)',
+  'dashboard.refresh_metrics_hint': '刷新指标并自动重连失败主机（R / F5 / Ctrl+R；按住 Shift 点击可强制重载配置）',
   'dashboard.add_host': '添加主机',
   'dashboard.no_servers': '暂无服务器',
   'dashboard.no_servers_desc': '添加主机，或从 ~/.ssh/config 导入以在此处查看。',
@@ -453,5 +454,24 @@ export const zhCN: Record<TranslationKey, string> = {
   'settings.trim_trailing_spaces_desc': '复制文本时自动去除每行末尾的空白与制表符缩进。',
   'settings.confirm_multi_line_paste': '多行粘贴二次确认',
   'settings.confirm_multi_line_paste_desc': '当粘贴内容包含换行符时弹出确认，防止 Shell 立即自动执行多行命令。',
-  'settings.clipboard_shortcuts_hint': '快捷键：复制 {copy}，粘贴 {paste}，复制全部回滚历史 {copyAll}，或通过 Ctrl+右键 打开菜单。当远程程序接管鼠标时（如 vim、tmux、htop），按住 Shift 键即可划选或粘贴。'
+  'settings.clipboard_shortcuts_hint': '快捷键：复制 {copy}，粘贴 {paste}，复制全部回滚历史 {copyAll}，或通过 Ctrl+右键 打开菜单。当远程程序接管鼠标时（如 vim、tmux、htop），按住 Shift 键即可划选或粘贴。',
+
+  // Settings: Fonts
+  'settings.ui_font': '界面字体',
+  'settings.ui_font_desc': '默认内置免费可商用的鸿蒙黑体（HarmonyOS Sans），离线渲染更清晰，也可随时切换。',
+  'settings.ui_font_harmonyos': '鸿蒙黑体',
+  'settings.ui_font_system': '系统默认',
+  'settings.ui_font_classic': '经典默认',
+  'settings.ui_font_custom': '自定义',
+  'settings.ui_font_custom_placeholder': '输入本机已安装的字体名称，例如 MiSans、霞鹜文楷',
+  'settings.ui_font_preview': '字体预览：OmnySSH 服务器实时监控 0123456789 AaBbCc',
+  'settings.terminal_font': '终端字体',
+  'settings.terminal_font_desc': '实时应用到已打开的终端标签，并自动保留 Nerd Font 图标回退。',
+  'settings.terminal_font_default': '系统等宽',
+  'settings.terminal_font_cascadia': 'Cascadia',
+  'settings.terminal_font_jetbrains': 'JetBrains',
+  'settings.terminal_font_fira': 'Fira Code',
+  'settings.terminal_font_custom': '自定义',
+  'settings.terminal_font_custom_placeholder': '输入本机等宽字体名称，例如 Sarasa Term SC、Consolas',
+  'settings.font_reset': '恢复默认字体'
 };

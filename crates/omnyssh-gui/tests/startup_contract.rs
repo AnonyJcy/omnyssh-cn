@@ -158,6 +158,31 @@ fn the_rpm_declares_the_libraries_it_links() {
     }
 }
 
+/// The Windows NSIS installer ships Simplified Chinese first (with a language selector
+/// so English Windows systems can still pick Chinese or English), keeping the setup flow
+/// localized for the Chinese distribution.
+#[test]
+fn the_windows_nsis_installer_ships_simplified_chinese() {
+    let config: serde_json::Value =
+        serde_json::from_str(&read(Path::new(MANIFEST_DIR).join("tauri.conf.json")))
+            .expect("tauri.conf.json is valid JSON");
+    let nsis = &config["bundle"]["windows"]["nsis"];
+    let languages = nsis["languages"]
+        .as_array()
+        .expect("bundle.windows.nsis.languages must be configured");
+
+    assert_eq!(
+        languages.first().and_then(serde_json::Value::as_str),
+        Some("SimpChinese"),
+        "SimpChinese must be the primary NSIS installer language"
+    );
+    assert_eq!(
+        nsis["displayLanguageSelector"],
+        serde_json::json!(true),
+        "NSIS should let users choose between Simplified Chinese and English"
+    );
+}
+
 /// `--bg` of the dark theme — the single source of truth for the app's backdrop.
 fn dark_background_token() -> String {
     let css = read(Path::new(MANIFEST_DIR).join("ui/src/app.css"));

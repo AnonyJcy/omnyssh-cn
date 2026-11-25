@@ -64,6 +64,10 @@
      border lands on the green button's left edge and leaves it over the content pane.
      5rem holds the whole cluster; the other platforms have no lights to clear. */
   --rail-w: 3.5rem;
+  /* Default bundled UI font stack (HarmonyOS Sans + native CJK fallbacks), updated live
+     by the font store (`stores/font.ts`) and pre-painted by `app.html` to avoid FOUC. */
+  --font-sans: 'HarmonyOS Sans', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei',
+    'Noto Sans CJK SC', sans-serif;
 }
 :root[data-os='macos'] {
   --titlebar-h: 1.75rem;
@@ -83,7 +87,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* Native-app feel: chrome, cards, and labels are not selectable. Selection is

@@ -31,7 +31,7 @@ export default {
     },
     extend: {
       fontFamily: {
-        sans: ['Helvetica Neue', 'Helvetica', 'Arial', 'sans-serif'],
+        sans: ['var(--font-sans)'],
         // Same tail as the terminal's stack (screens/TerminalView.svelte), and for the
         // same reason: the chrome's `font-mono` also renders raw remote output — snippet
         // results and SFTP file previews, and any remote path or filename it lists. The

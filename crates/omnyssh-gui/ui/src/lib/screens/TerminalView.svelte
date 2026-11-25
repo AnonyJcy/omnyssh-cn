@@ -12,6 +12,7 @@
   import type { SearchAddon } from '@xterm/addon-search';
   import { Channel } from '@tauri-apps/api/core';
   import { theme } from '$lib/stores/theme';
+  import { fontPrefs, resolveTerminalFontStack } from '$lib/stores/font';
   import { xtermTheme } from '$lib/theme/terminalTheme';
   import { sessions, type Session } from '$lib/stores/sessions';
   import { closeSession } from '$lib/stores/navigation';
@@ -117,6 +118,7 @@
   let connected = false;
   let ready = $state(false);
   let themeUnsub: (() => void) | undefined;
+  let fontUnsub: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let fitScheduled = false;
   // The top-edge fade dissolves scrolled output into the top edge, but never the live
@@ -373,7 +375,7 @@
       if (destroyed) return;
 
       term = new Terminal({
-        fontFamily: MONO,
+        fontFamily: resolveTerminalFontStack(fontPrefs.get(), MONO),
         fontSize: 13,
         cursorBlink: true,
         scrollback: 5000,
@@ -405,6 +407,16 @@
       // synchronous first call (pre-paint) also sets the initial theme.
       themeUnsub = theme.subscribe((t) => {
         if (term) term.options.theme = xtermTheme(t);
+      });
+      let firstFontSync = true;
+      fontUnsub = fontPrefs.subscribe((prefs) => {
+        if (!term) return;
+        const nextFamily = resolveTerminalFontStack(prefs, MONO);
+        if (term.options.fontFamily !== nextFamily) {
+          term.options.fontFamily = nextFamily;
+          if (!firstFontSync) scheduleFit();
+        }
+        firstFontSync = false;
       });
 
       // Fit before opening so the remote PTY starts at the visible size.
@@ -521,6 +533,7 @@
   onDestroy(() => {
     destroyed = true;
     themeUnsub?.();
+    fontUnsub?.();
     resizeObserver?.disconnect();
     window.removeEventListener('mouseup', onMouseUp);
     container?.removeEventListener('contextmenu', onContextMenu);

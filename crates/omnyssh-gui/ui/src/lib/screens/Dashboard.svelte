@@ -26,6 +26,7 @@
   import { spawnSession } from '$lib/stores/navigation';
   import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { hosts } from '$lib/stores/hosts';
+  import { statuses } from '$lib/stores/statuses';
   import { lastError } from '$lib/stores/notifications';
   import {
     saveHost,
@@ -37,7 +38,7 @@
     tunnelStart,
     tunnelStop
   } from '$lib/ipc/commands';
-  import { isGroupHotkey, isRefreshHotkey } from '$lib/stores/ui';
+  import { isGroupHotkey, isRefreshHotkey, onViewRefresh } from '$lib/stores/ui';
   import { beginKeySetup, dismissKeySetup } from '$lib/stores/keySetup';
   import { emptyForm, formFromHost } from './hostForm';
   import { clampToScroller, dropTarget, scrollParent, scrollStep, swallowClick } from './cardDrag';
@@ -269,21 +270,36 @@
 
   const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-  // Force an immediate metric poll of every host (tech-gui.md §4.2), shared by the
-  // refresh button and the `r` hotkey (mirrors the TUI). The command returns before the
-  // fresh metrics arrive (they land via `metrics-updated` events), so a short minimum
-  // spin gives the click/keypress visible feedback.
+  // Force an immediate refresh of every host (tech-gui.md §4.2), shared by the
+  // refresh button, `r` hotkey, and `F5` / `Ctrl+R` / `⌘R`. When every host is already
+  // connected, `refreshMetrics` nudges the existing SSH pollers without reconnecting;
+  // when any host is failed/disconnected (sitting in reconnect backoff), or when the user
+  // requests a hard reload (`Shift+Click` / `Ctrl+Shift+R` / `Shift+F5`), `reloadHosts`
+  // re-reads `~/.ssh/config` + `hosts.toml` and immediately reconnects failed hosts.
   let refreshing = $state(false);
-  async function refresh(): Promise<void> {
+  async function refresh(forceReload = false): Promise<void> {
     if (refreshing) return;
     refreshing = true;
+    const minSpin = new Promise((resolve) => setTimeout(resolve, 500));
     try {
-      await refreshMetrics();
+      const statusMap = get(statuses);
+      const needsReconnect =
+        forceReload ||
+        $hosts.length === 0 ||
+        $hosts.some((h) => {
+          const st = statusMap.get(h.name);
+          return !st || st.kind === 'failed' || st.kind === 'unknown';
+        });
+      await Promise.all([needsReconnect ? reloadHosts() : refreshMetrics(), minSpin]);
     } catch (e) {
       lastError.set(message(e));
+      await minSpin;
+    } finally {
+      refreshing = false;
     }
-    setTimeout(() => (refreshing = false), 500);
   }
+
+  onDestroy(onViewRefresh(({ hard }) => void refresh(hard)));
 
   // Dashboard hotkeys (tech-gui.md §2): `r` refreshes metrics, `g` toggles group-by-tag.
   // This listener only exists while the dashboard is mounted (the selector unmounts when
@@ -532,10 +548,10 @@
       <button
         type="button"
         class="{roundBtn} disabled:opacity-60"
-        title={$t('dashboard.refresh_metrics')}
+        title={$t('dashboard.refresh_metrics_hint')}
         aria-label={$t('dashboard.refresh_metrics')}
         disabled={refreshing}
-        onclick={() => refresh()}
+        onclick={(e) => refresh(e.shiftKey)}
       >
         <span class="inline-flex {refreshing ? 'animate-spin' : ''}">
           <Icon name="refresh" size={15} />

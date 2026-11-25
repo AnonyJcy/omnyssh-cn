@@ -40,6 +40,7 @@ export const en = {
   'dashboard.close_search': 'Close search',
   'dashboard.search_hosts': 'Search hosts',
   'dashboard.refresh_metrics': 'Refresh metrics (R)',
+  'dashboard.refresh_metrics_hint': 'Refresh metrics & reconnect failed hosts (R / F5 / Ctrl+R; Shift+click to reload SSH config)',
   'dashboard.add_host': 'Add host',
   'dashboard.no_servers': 'No servers yet',
   'dashboard.no_servers_desc': 'Add a host, or import one from your SSH config, to see it here.',
@@ -451,7 +452,26 @@ export const en = {
   'settings.trim_trailing_spaces_desc': 'Strip the padding at the end of each copied line.',
   'settings.confirm_multi_line_paste': 'Confirm multi-line paste',
   'settings.confirm_multi_line_paste_desc': 'Ask first when a paste contains a line break, since the shell would run it immediately.',
-  'settings.clipboard_shortcuts_hint': 'Copy: {copy}. Paste: {paste}. Copy all (the whole scrollback): {copyAll}, or Ctrl+right-click for the menu. When a remote app uses the mouse (vim, tmux, htop), hold Shift to select or paste.'
+  'settings.clipboard_shortcuts_hint': 'Copy: {copy}. Paste: {paste}. Copy all (the whole scrollback): {copyAll}, or Ctrl+right-click for the menu. When a remote app uses the mouse (vim, tmux, htop), hold Shift to select or paste.',
+
+  // Settings: Fonts
+  'settings.ui_font': 'Interface font',
+  'settings.ui_font_desc': 'Bundled HarmonyOS Sans renders crisp CJK and Latin text offline on every OS.',
+  'settings.ui_font_harmonyos': 'HarmonyOS Sans',
+  'settings.ui_font_system': 'System',
+  'settings.ui_font_classic': 'Classic',
+  'settings.ui_font_custom': 'Custom',
+  'settings.ui_font_custom_placeholder': 'Installed font name, e.g. MiSans, Inter',
+  'settings.ui_font_preview': 'Preview: OmnySSH 0123456789 — Server dashboard & terminal',
+  'settings.terminal_font': 'Terminal font',
+  'settings.terminal_font_desc': 'Applied live to open terminals while keeping Nerd Font symbol fallbacks.',
+  'settings.terminal_font_default': 'Default',
+  'settings.terminal_font_cascadia': 'Cascadia',
+  'settings.terminal_font_jetbrains': 'JetBrains',
+  'settings.terminal_font_fira': 'Fira Code',
+  'settings.terminal_font_custom': 'Custom',
+  'settings.terminal_font_custom_placeholder': 'Installed monospace font, e.g. Sarasa Term SC, Consolas',
+  'settings.font_reset': 'Reset fonts'
 } as const;
 
 export type TranslationKey = keyof typeof en;
