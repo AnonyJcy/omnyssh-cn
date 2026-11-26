@@ -273,13 +273,13 @@ export const zhCN: Record<TranslationKey, string> = {
   'settings.check_now': '立即检查更新',
   'settings.checking': '正在检查更新…',
   'settings.up_to_date': '当前已是最新版本。',
-  'settings.update_available': '发现新版本 v{version} 可用。',
+  'settings.update_available': 'KoraSSH v{version} 可用（本项目已迁移）。',
   'settings.download': '前往下载',
 
   // Update Banner
-  'update_banner.available': '发现新版本 —— v{version}',
-  'update_banner.desc': '已有更新的 OmnySSH 发行版可供下载。',
-  'update_banner.download': '下载更新',
+  'update_banner.available': 'KoraSSH v{version} 已发布',
+  'update_banner.desc': '本项目已迁移至 KoraSSH，这是 omnyssh-cn 的最后一个版本。请前往新仓库下载安装，主机、命令片段与设置会自动迁移。',
+  'update_banner.download': '前往下载 KoraSSH',
   'update_banner.skip': '跳过此版本',
   'update_banner.dismiss': '稍后提醒',
 

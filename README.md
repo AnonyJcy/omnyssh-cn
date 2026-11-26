@@ -1,3 +1,12 @@
+> [!IMPORTANT]
+> ## 本项目已迁移至 **[KoraSSH](https://github.com/AnonyJcy/korassh)**
+>
+> OmnySSH 中文维护版已升级为独立品牌 **KoraSSH**，并在新仓库继续维护；本仓库自 `v1.1.11` 起不再更新。
+>
+> - **前往下载**：[KoraSSH 最新版本](https://github.com/AnonyJcy/korassh/releases/latest)
+> - **配置自动迁移**：KoraSSH 首次启动会自动把这里的 `hosts.toml` / `snippets.toml` / `config.toml` 与桌面端设置复制过去（不改动旧目录），并把明文密码升级为 AES-256-GCM 加密存储。
+> - **应用内提示**：升级到 `v1.1.11` 后，终端版与桌面端的更新检查会直接引导前往 KoraSSH 的发布页。两者是不同的应用（名称、标识与配置目录均不同），所以不会原地自更新。
+
 <div align="center">
 
 # OmnySSH（中文维护版）

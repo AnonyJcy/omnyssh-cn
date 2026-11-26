@@ -271,13 +271,13 @@ export const en = {
   'settings.check_now': 'Check now',
   'settings.checking': 'Checking…',
   'settings.up_to_date': 'Up to date.',
-  'settings.update_available': 'Update available: v{version}',
+  'settings.update_available': 'KoraSSH v{version} is available (this fork has moved)',
   'settings.download': 'Download',
 
   // Update Banner
-  'update_banner.available': 'Update available — v{version}',
-  'update_banner.desc': 'A newer OmnySSH release is ready.',
-  'update_banner.download': 'Download',
+  'update_banner.available': 'KoraSSH v{version} is available',
+  'update_banner.desc': 'This fork has moved to KoraSSH and this is its last release. Download KoraSSH from its new home; your hosts, snippets and settings carry over.',
+  'update_banner.download': 'Get KoraSSH',
   'update_banner.skip': 'Skip',
   'update_banner.dismiss': 'Dismiss',
 

@@ -1,6 +1,8 @@
 <script lang="ts">
   // Update banner (tech-gui.md §4.3). Floats above the status bar whenever an update is
-  // available — from the startup `update-available` event or a manual check. It opens the
+  // available — from the startup `update-available` event or a manual check. This is the
+  // fork's last release: what it offers is KoraSSH, on its own release page, so the notice
+  // says where the project went and wraps rather than truncating. It opens the
   // release page rather than self-updating: `plugins.updater` still ships with no endpoints
   // (§3.7, Stage 5), so `install_update` cannot succeed on any platform, and a button that
   // only ever reports a failure is worse than a download link. Skip persists the version to
@@ -45,13 +47,13 @@
   {@const info = $availableUpdate}
   <div class="pointer-events-none fixed inset-x-0 bottom-14 z-40 flex justify-center px-4">
     <div
-      class="pointer-events-auto flex w-full max-w-xl items-center gap-3 rounded-2xl border border-default bg-surface-raised px-4 py-3 shadow-soft"
+      class="pointer-events-auto flex w-full max-w-2xl items-center gap-3 rounded-2xl border border-default bg-surface-raised px-4 py-3 shadow-soft"
       role="status"
     >
       <span class="shrink-0 text-muted"><Icon name="download" size={18} /></span>
       <div class="min-w-0">
         <p class="text-sm font-medium">{$t('update_banner.available', { version: info.version })}</p>
-        <p class="truncate text-xs text-muted">{$t('update_banner.desc')}</p>
+        <p class="text-xs leading-relaxed text-muted">{$t('update_banner.desc')}</p>
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-1.5">
         <button

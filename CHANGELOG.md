@@ -7,6 +7,17 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## 1.1.11 — 2026-11-27
+
+### 最后一个版本：项目迁移至 KoraSSH
+
+- **项目已升级为独立品牌 [KoraSSH](https://github.com/AnonyJcy/korassh)**，本仓库自本版本起停止更新。
+- **更新检查指向 KoraSSH**：终端版与桌面端的更新检查改为查询 `AnonyJcy/korassh` 的最新发行版。本版本不再提供原地自更新（`can_self_update = false`），更新横幅与终端版提示会引导前往 KoraSSH 的发布页下载安装。
+- **配置无缝迁移**：KoraSSH 首次启动会自动复制本版本的 `hosts.toml` / `snippets.toml` / `config.toml` 与桌面端偏好设置，并将明文密码升级为 AES-256-GCM 加密存储。
+- README 顶部新增迁移公告。
+
+---
+
 ## 1.1.10 — 2026-11-26
 
 ### 新增特性与功能改进

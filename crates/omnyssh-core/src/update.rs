@@ -1,9 +1,9 @@
 //! In-app update checker.
 //!
-//! On startup OmnySSH queries the GitHub Releases API for the latest version.
-//! Depending on how the binary was installed it can either self-replace the
-//! executable (manual / `install.sh` installs on Linux and macOS) or show the
-//! package-manager command the user should run instead.
+//! This is the fork's last release. It queries the GitHub Releases API of KoraSSH,
+//! the project it continues as, and can only point there: what is newer is a
+//! different app with its own binary, bundle identifier and config directory, so
+//! there is nothing here that could replace this executable in place.
 
 use std::io::Read;
 use std::path::Path;
@@ -15,9 +15,11 @@ use semver::Version;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
-/// GitHub repository that hosts this Chinese fork's releases.
-/// Keep update checks and downloads on the same distribution as the installed app.
-const REPO: &str = "AnonyJcy/omnyssh-cn";
+/// The repository this fork continues as. Its releases are KoraSSH's.
+const REPO: &str = "AnonyJcy/korassh";
+/// No path from this build to a KoraSSH one: the names, the identifier and the
+/// config directory all differ, so the updater never replaces the executable.
+const SELF_UPDATE_AVAILABLE: bool = false;
 /// Timeout applied to every network request the updater makes.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 /// Target triple this binary was built for (provided by `build.rs`).
@@ -62,13 +64,12 @@ impl InstallMethod {
     }
 
     /// Command the user runs to upgrade through this install method.
-    /// `None` means the app is able to perform the update itself.
+    /// `None` means the app is able to perform the update itself — or, as here,
+    /// that no command leads on from this build: KoraSSH is not published under
+    /// this fork's package names.
     pub fn upgrade_command(self) -> Option<&'static str> {
         match self {
-            Self::Manual => None,
-            Self::Homebrew => Some("brew upgrade omnyssh"),
-            Self::Cargo => Some("cargo install omnyssh --force"),
-            Self::Nix => Some("nix profile upgrade omnyssh"),
+            Self::Manual | Self::Homebrew | Self::Cargo | Self::Nix => None,
         }
     }
 }
@@ -121,7 +122,8 @@ pub async fn check() -> Option<UpdateInfo> {
         latest,
         tag,
         method,
-        can_self_update: method == InstallMethod::Manual
+        can_self_update: SELF_UPDATE_AVAILABLE
+            && method == InstallMethod::Manual
             && cfg!(any(target_os = "linux", target_os = "macos"))
             && binary_is_replaceable(),
     })
@@ -167,6 +169,13 @@ async fn fetch_latest_tag() -> Result<String> {
 ///
 /// Only valid when [`UpdateInfo::can_self_update`] is `true`.
 pub async fn perform_update(info: &UpdateInfo) -> Result<()> {
+    if !SELF_UPDATE_AVAILABLE {
+        anyhow::bail!(
+            "this is the last release of this fork: it does not update itself. \
+             KoraSSH is downloaded from {}",
+            info.release_url()
+        );
+    }
     let archive_name = format!("omny-{BUILD_TARGET}.tar.gz");
     let base = format!("https://github.com/{REPO}/releases/download/{}", info.tag);
     let client = http_client()?;
@@ -330,26 +339,38 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_command_only_for_package_managers() {
-        assert!(InstallMethod::Manual.upgrade_command().is_none());
-        assert!(InstallMethod::Homebrew.upgrade_command().is_some());
-        assert!(InstallMethod::Cargo.upgrade_command().is_some());
-        assert!(InstallMethod::Nix.upgrade_command().is_some());
+    fn no_install_method_has_an_upgrade_command() {
+        // Nothing replaces this fork in place: KoraSSH is not published under its names.
+        for method in [
+            InstallMethod::Manual,
+            InstallMethod::Homebrew,
+            InstallMethod::Cargo,
+            InstallMethod::Nix,
+        ] {
+            assert!(method.upgrade_command().is_none());
+        }
     }
 
     #[test]
-    fn release_urls_stay_on_the_chinese_distribution() {
+    fn release_urls_lead_to_korassh() {
         let info = UpdateInfo {
-            current: "1.1.9".into(),
-            latest: "1.1.10".into(),
-            tag: "v1.1.10".into(),
+            current: "1.1.11".into(),
+            latest: "2.0.0".into(),
+            tag: "v2.0.0".into(),
             method: InstallMethod::Manual,
             can_self_update: false,
         };
         assert_eq!(
             info.release_url(),
-            "https://github.com/AnonyJcy/omnyssh-cn/releases/tag/v1.1.10"
+            "https://github.com/AnonyJcy/korassh/releases/tag/v2.0.0"
         );
+    }
+
+    /// The whole point of this build: KoraSSH's first release is newer than it, so the
+    /// check does point users there. Bumping this fork to 2.0.0 or beyond would silence it.
+    #[test]
+    fn korasshs_first_release_is_newer_than_this_build() {
+        assert!(is_newer("2.0.0", env!("CARGO_PKG_VERSION")));
     }
 
     #[test]

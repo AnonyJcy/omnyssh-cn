@@ -3443,7 +3443,7 @@ dependencies = [
 
 [[package]]
 name = "omnyssh"
-version = "1.1.10"
+version = "1.1.11"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3463,7 +3463,7 @@ dependencies = [
 
 [[package]]
 name = "omnyssh-core"
-version = "1.1.10"
+version = "1.1.11"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3492,7 +3492,7 @@ dependencies = [
 
 [[package]]
 name = "omnyssh-gui"
-version = "1.1.10"
+version = "1.1.11"
 dependencies = [
  "chrono",
  "gtk",
